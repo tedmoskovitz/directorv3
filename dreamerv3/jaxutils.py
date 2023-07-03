@@ -474,3 +474,71 @@ class SlowUpdater:
         lambda s, d: mix * s + (1 - mix) * d,
         source, self.dst.getm()))
     self.updates.write(updates + 1)
+
+
+class AutoAdapt:
+
+  def __init__(
+      self, shape, impl, scale, target, min, max,
+      vel=0.1, thres=0.1, inverse=False):
+    self._shape = shape
+    self._impl = impl
+    self._target = target
+    self._min = min
+    self._max = max
+    self._vel = vel
+    self._inverse = inverse
+    self._thres = thres
+    if self._impl == 'fixed':
+      self._scale = jnp.array(scale)
+    elif self._impl == 'mult':
+      self._scale = jnp.ones(shape, dtype=jnp.float32)
+    elif self._impl == 'prop':
+      self._scale = jnp.ones(shape, dtype=jnp.float32)
+    else:
+      raise NotImplementedError(self._impl)
+
+  def __call__(self, reg, update=True):
+    update and self.update(reg)
+    scale = self.scale()
+    loss = scale * (-reg if self._inverse else reg)
+    metrics = {
+        'mean': reg.mean(), 'std': reg.std(),
+        'scale_mean': scale.mean(), 'scale_std': scale.std()}
+    return loss, metrics
+
+  def scale(self):
+    if self._impl == 'fixed':
+      scale = self._scale
+    elif self._impl == 'mult':
+      scale = self._scale
+    elif self._impl == 'prop':
+      scale = self._scale
+    else:
+      raise NotImplementedError(self._impl)
+    return jax.lax.stop_gradient(jnp.array(scale))
+
+  def update(self, reg):
+    avg = reg.mean(list(range(len(reg.shape) - len(self._shape))))
+    if self._impl == 'fixed':
+      pass
+    elif self._impl == 'mult':
+      below = avg < (1 / (1 + self._thres)) * self._target
+      above = avg > (1 + self._thres) * self._target
+      if self._inverse:
+        below, above = above, below
+      inside = ~below & ~above
+      adjusted = (
+          above.astype(jnp.float32) * self._scale * (1 + self._vel) +
+          below.astype(jnp.float32) * self._scale / (1 + self._vel) +
+          inside.astype(jnp.float32) * self._scale)
+      self._scale = jnp.clip(adjusted, self._min, self._max)
+    elif self._impl == 'prop':
+      direction = avg - self._target
+      if self._inverse:
+        direction = -direction
+      self._scale = jnp.clip(
+          self._scale + self._vel * direction, self._min, self._max)
+    else:
+      raise NotImplementedError(self._impl)
+

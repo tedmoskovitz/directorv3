@@ -2,6 +2,7 @@ import embodied
 import jax
 import jax.numpy as jnp
 import ruamel.yaml as yaml
+import pdb
 tree_map = jax.tree_util.tree_map
 sg = lambda x: tree_map(jax.lax.stop_gradient, x)
 
@@ -189,12 +190,51 @@ class WorldModel(nj.Module):
       return {**state, 'action': policy(state)}
     traj = jaxutils.scan(
         step, jnp.arange(horizon), start, self.config.imag_unroll)
+    # dict_keys(['action', 'deter', 'logit', 'stoch'])
     traj = {
         k: jnp.concatenate([start[k][None], v], 0) for k, v in traj.items()}
     cont = self.heads['cont'](traj).mode()
     traj['cont'] = jnp.concatenate([first_cont[None], cont[1:]], 0)
     discount = 1 - 1 / self.config.horizon
     traj['weight'] = jnp.cumprod(discount * traj['cont'], 0) / discount
+    return traj
+  
+  def imagine_carry(self, policy, start, horizon, carry):
+    first_cont = (1.0 - start['is_terminal']).astype(jnp.float32)
+    keys = list(self.rssm.initial(1).keys())
+    start = {k: v for k, v in start.items() if k in keys}
+    carry_keys = list(carry.keys())
+    # keys += list(carry.keys()) + ['action']  ###### make sure this isn't a double
+    initial_action, initial_carry = policy(start, carry)
+    start['action'] = initial_action['action'].sample(seed=nj.rng())
+    start['carry'] = initial_carry
+    def step(prev, _):
+      prev = prev.copy()
+      state = self.rssm.img_step(prev, prev.pop('action'))
+      action_dict, carry = policy(state, prev['carry'])
+      action = action_dict['action'].sample(seed=nj.rng())
+      return {**state, 'action': action, 'carry': carry}
+    
+    # dict_keys(['action', 'carry', 'deter', 'logit', 'stoch'])
+    # traj[not 'carry'] is (15, 192, d_key)
+    # keys of traj['carry'] are (15, 192, d_key)
+    traj = jaxutils.scan(step, jnp.arange(horizon), start, self.config.imag_unroll)
+    # I'm not entirely sure if carry should be flattened into traj or not. Going
+    # to assume yes, but if not, will need to do some kinf of tree_map of the
+    # dict comprehension below. 
+    traj.update(traj['carry'])
+    del traj['carry']
+    start.update(start['carry'])
+    del start['carry']
+    # add start back in -- now (16, 192, d_key)
+    traj = {k: jnp.concatenate(
+      [start[k][None], v], 0) for k, v in traj.items()}
+    
+    cont = self.heads['cont'](traj).mode()  # Director-v1 does .mean()
+    traj['cont'] = jnp.concatenate([first_cont[None], cont[1:]], 0)
+    discount = 1 - 1 / self.config.horizon
+    traj['weight'] = jnp.cumprod(discount * traj['cont'], 0) / discount
+
     return traj
 
   def report(self, data):
@@ -239,7 +279,7 @@ class WorldModel(nj.Module):
 class ImagActorCritic(nj.Module):
 
   def __init__(self, critics, scales, act_space, config):
-    critics = {k: v for k, v in critics.items() if scales[k]}
+    critics = {k: v for k, v in critics.items() if (scales[k] and scales[k] != 0)}
     for key, scale in scales.items():
       assert not scale or key in critics, key
     self.critics = {k: v for k, v in critics.items() if scales[k]}

@@ -4,6 +4,7 @@ import embodied
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pdb
 
 from . import jaxutils
 from . import ninjax as nj
@@ -81,7 +82,8 @@ class JAXAgent(embodied.Agent):
       self._once = False
       assert jaxutils.Optimizer.PARAM_COUNTS
       for name, count in jaxutils.Optimizer.PARAM_COUNTS.items():
-        mets[f'params_{name}'] = float(count)
+        if count is not None:  # TODO(Ted) this is a hack...
+          mets[f'params_{name}'] = float(count)
     return outs, state, mets
 
   def report(self, data):
@@ -146,7 +148,7 @@ class JAXAgent(embodied.Agent):
     jax.config.update('jax_platform_name', self.config.platform)
     jax.config.update('jax_disable_jit', not self.config.jit)
     jax.config.update('jax_debug_nans', self.config.debug_nans)
-    jax.config.update('jax_transfer_guard', 'disallow')
+    # jax.config.update('jax_transfer_guard', 'disallow')  # TODO(ted): figure out if we need to re-enable
     if self.config.platform == 'cpu':
       jax.config.update('jax_disable_most_optimizations', self.config.debug)
     jaxutils.COMPUTE_DTYPE = getattr(jnp, self.config.precision)
