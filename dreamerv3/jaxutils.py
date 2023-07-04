@@ -476,7 +476,7 @@ class SlowUpdater:
     self.updates.write(updates + 1)
 
 
-class AutoAdapt:
+class AutoAdapt(nj.Module):
 
   def __init__(
       self, shape, impl, scale, target, min, max,
@@ -492,9 +492,11 @@ class AutoAdapt:
     if self._impl == 'fixed':
       self._scale = jnp.array(scale)
     elif self._impl == 'mult':
-      self._scale = jnp.ones(shape, dtype=jnp.float32)
+      self._scale = nj.Variable(
+        jnp.ones, shape, jnp.float32, name='goal-vae_kl_scale')
     elif self._impl == 'prop':
-      self._scale = jnp.ones(shape, dtype=jnp.float32)
+      self._scale = nj.Variable(
+        jnp.ones, shape, jnp.float32, name='goal-vae_kl_scale')
     else:
       raise NotImplementedError(self._impl)
 
@@ -511,9 +513,9 @@ class AutoAdapt:
     if self._impl == 'fixed':
       scale = self._scale
     elif self._impl == 'mult':
-      scale = self._scale
+      scale = self._scale.read()
     elif self._impl == 'prop':
-      scale = self._scale
+      scale = self._scale.read()
     else:
       raise NotImplementedError(self._impl)
     return jax.lax.stop_gradient(jnp.array(scale))
@@ -529,16 +531,16 @@ class AutoAdapt:
         below, above = above, below
       inside = ~below & ~above
       adjusted = (
-          above.astype(jnp.float32) * self._scale * (1 + self._vel) +
-          below.astype(jnp.float32) * self._scale / (1 + self._vel) +
-          inside.astype(jnp.float32) * self._scale)
-      self._scale = jnp.clip(adjusted, self._min, self._max)
+          above.astype(jnp.float32) * self._scale.read() * (1 + self._vel) +
+          below.astype(jnp.float32) * self._scale.read() / (1 + self._vel) +
+          inside.astype(jnp.float32) * self._scale.read())
+      self._scale.write(jnp.clip(adjusted, self._min, self._max))
     elif self._impl == 'prop':
       direction = avg - self._target
       if self._inverse:
         direction = -direction
-      self._scale = jnp.clip(
-          self._scale + self._vel * direction, self._min, self._max)
+      self._scale.write(jnp.clip(
+          self._scale.read() + self._vel * direction, self._min, self._max))
     else:
       raise NotImplementedError(self._impl)
 

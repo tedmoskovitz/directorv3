@@ -73,7 +73,7 @@ class Hierarchy(nj.Module):
         self.goal_shape, dims='context', **self.config.goal_decoder, name='decoder_mlp')
     # this is to automatically update the KL scaling -- theoretically we can
     # avoid this now with Dreamer-v3
-    self.kl = jaxutils.AutoAdapt((), **self.config.encdec_kl)
+    self.kl = jaxutils.AutoAdapt((), **self.config.encdec_kl, name='goal-vae_kl-adapt')
     # self.opt = tfutils.Optimizer('goal', **config.encdec_opt)
     # optimizer for goal autoencoder
     self.opt = jaxutils.Optimizer(**config.encdec_opt, name='autoenc_opt')
