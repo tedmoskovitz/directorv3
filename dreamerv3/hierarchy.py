@@ -150,60 +150,7 @@ class Hierarchy(nj.Module):
       raise NotImplementedError(self.config.jointly)
     return None, metrics
 
-  def train_jointly_tf(self, imagine, start):
-    """
-    TODO: semantics differ a bit here from Dreamer-v3 code;
-    in Dreamer-v3 agent.ImagActorCritic.train (L265) imagines a traj itself and
-    then does the update, but here we imagine the traj here and just pass it to
-    an update function. My inclination is to use this function to call the
-    ImagActorCritic.train function (i.e., preserve the Dreamer-v3) structure as
-    much as possible.
-    """
-    start = start.copy()
-    metrics = {}
-    # with jnp.GradientTape(persistent=True) as tape:
-    policy = functools.partial(self.policy, imag=True)
-    # carry is an HRL dict containing 'step', 'skill', and 'goal'
-    traj = self.wm.imagine_carry(
-        policy, start, self.config.imag_horizon,
-        self.initial(len(start['is_first'])))
-    traj['reward_extr'] = self.extr_reward(traj)
-    traj['reward_expl'] = self.expl_reward(traj)
-    traj['reward_goal'] = self.goal_reward(traj)
-    traj['delta'] = traj['goal'] - self.feat(traj).astype(jnp.float32)
-    wtraj = self.split_traj(traj)
-    mtraj = self.abstract_traj(traj)
-    mets = self.worker.update(wtraj)  #, tape)
-    metrics.update({f'worker_{k}': v for k, v in mets.items()})
-    mets = self.manager.update(mtraj)  #, tape)
-    metrics.update({f'manager_{k}': v for k, v in mets.items()})
-    return traj, metrics
-
   def train_jointly(self, imagine, start):
-    def loss(start):
-      start = start.copy()
-      # metrics = {}
-      # with jnp.GradientTape(persistent=True) as tape:
-      policy = functools.partial(self.policy, imag=True)
-      # carry is an HRL dict containing 'step', 'skill', and 'goal'
-      traj = self.wm.imagine_carry(
-          policy, start, self.config.imag_horizon,
-          self.initial(len(start['is_first'])))
-      traj['reward_extr'] = self.extr_reward(traj)
-      traj['reward_expl'] = self.expl_reward(traj)
-      traj['reward_goal'] = self.goal_reward(traj)
-      traj['delta'] = traj['goal'] - self.feat(traj).astype(jnp.float32)
-      wtraj = self.split_traj(traj)
-      mtraj = self.abstract_traj(traj)
-      worker_loss, worker_metrics = self.worker.loss(wtraj)
-      worker_metrics = {"worker_" + k: v for k, v in worker_metrics.items()}
-      manager_loss, manager_metrics = self.manager.loss(mtraj)
-      manager_metrics = {"manager_" + k: v for k, v in manager_metrics.items()}
-      loss = worker_loss + manager_loss
-      metrics = {**worker_metrics, **manager_metrics}
-      return loss, (traj, metrics, wtraj, mtraj)
-    
-
     start = start.copy()
     policy = functools.partial(self.policy, imag=True)
     # carry is an HRL dict containing 'step', 'skill', and 'goal'
