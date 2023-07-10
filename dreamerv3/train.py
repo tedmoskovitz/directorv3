@@ -1,5 +1,6 @@
 import importlib
 import pathlib
+import pdb
 import sys
 import warnings
 from functools import partial as bind
@@ -107,14 +108,18 @@ def main(argv=None):
 
 def make_logger(parsed, logdir, step, config):
   multiplier = config.env.get(config.task.split('_')[0], {}).get('repeat', 1)
-  logger = embodied.Logger(step, [
+  logging_outs = [
       embodied.logger.TerminalOutput(config.filter),
       embodied.logger.JSONLOutput(logdir, 'metrics.jsonl'),
       embodied.logger.JSONLOutput(logdir, 'scores.jsonl', 'episode/score'),
       # embodied.logger.TensorBoardOutput(logdir),
-      embodied.logger.WandBOutput(logdir.name, config),
+      # embodied.logger.WandBOutput('episode/score', logdir, config),  # logdir.name
       # embodied.logger.MLFlowOutput(logdir.name),
-  ], multiplier)
+  ]
+  if config.get('use_wandb', False):
+    logging_outs.append(
+      embodied.logger.WandBOutput('episode/score', logdir, config))
+  logger = embodied.Logger(step, logging_outs, multiplier)
   return logger
 
 
@@ -161,7 +166,7 @@ def make_env(config, **overrides):
   ctor = {
       'dummy': 'embodied.envs.dummy:Dummy',
       'gym': 'embodied.envs.from_gym:FromGym',
-      'dm': 'embodied.envs.from_dmenv:FromDM',
+      'dm': 'embodied.envs.from_dm:FromDM',
       'crafter': 'embodied.envs.crafter:Crafter',
       'dmc': 'embodied.envs.dmc:DMC',
       'atari': 'embodied.envs.atari:Atari',
@@ -169,6 +174,7 @@ def make_env(config, **overrides):
       'minecraft': 'embodied.envs.minecraft:Minecraft',
       'loconav': 'embodied.envs.loconav:LocoNav',
       'pinpad': 'embodied.envs.pinpad:PinPad',
+      'bsuite': 'embodied.envs.bsuite:BsuiteEnv',
   }[suite]
   if isinstance(ctor, str):
     module, cls = ctor.split(':')

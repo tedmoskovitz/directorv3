@@ -1,5 +1,6 @@
 import re
 
+import pdb
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -92,6 +93,7 @@ class RSSM(nj.Module):
         lambda x, y: x + self._mask(y, is_first),
         prev_state, self.initial(len(is_first)))
     prior = self.img_step(prev_state, prev_action)
+    # prior['deter'] is [batch_size, deter_size]
     x = jnp.concatenate([prior['deter'], embed], -1)
     x = self.get('obs_out', Linear, **self._kw)(x)
     stats = self._stats('obs_stats', x)

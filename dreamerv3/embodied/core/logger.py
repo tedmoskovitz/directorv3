@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+import pdb
 
 import numpy as np
 
@@ -231,11 +232,12 @@ class WandBOutput:
   def __init__(self, pattern, logdir, config):
     self._pattern = re.compile(pattern)
     import wandb
+    # pdb.set_trace()
     wandb.init(
-        project="dreamerv3",
+        project="directorv3",
         name=logdir.name,
         # sync_tensorboard=True,,
-        entity='word-bots',
+        # entity='word-bots',
         config=dict(config),
     )
     self._wandb = wandb

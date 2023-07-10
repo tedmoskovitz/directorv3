@@ -4,6 +4,7 @@ defaults:
   method: name
   task: dummy_disc
   logdir: /dev/null
+  use_wandb: True
   replay: uniform
   replay_size: 1e6
   replay_online: False
@@ -56,7 +57,7 @@ defaults:
     loconav: {size: [64, 64], repeat: 2, camera: -1}
 
   # Agent
-  task_behavior: Hierarchy #Greedy #Hierarchy  # Greedy
+  task_behavior: Hierarchy #Greedy 
   expl_behavior: None
   batch_size: 16
   batch_length: 64
@@ -119,7 +120,6 @@ defaults:
   vae_imag: False
   vae_replay: True
   vae_span: False
-  # encdec_kl: {impl: fixed, scale: 0.0, target: 10.0, min: 1e-5, max: 1.0}
   encdec_kl: {impl: mult, scale: 0.0, target: 10.0, min: 1e-5, max: 1.0}
   encdec_opt: {opt: adam, lr: 1e-4, eps: 1e-6, clip: 100.0, wd: 1e-2, wd_pattern: 'kernel'}
   explorer: False
@@ -219,7 +219,7 @@ dmc_proprio:
 
 bsuite:
 
-  task: bsuite_mnist/0
+  task: bsuite_catch/0
   envs: {amount: 1, parallel: none}
   run:
     script: train
@@ -228,6 +228,8 @@ bsuite:
   .*\.cnn_depth: 32
   .*\.layers: 2
   .*\.units: 512
+  # encoder: {mlp_keys: '.*', cnn_keys: '$^'}
+  # decoder: {mlp_keys: '.*', cnn_keys: '$^'}
 
 loconav:
 

@@ -151,6 +151,7 @@ class WorldModel(nj.Module):
 
   def loss(self, data, state):
     embed = self.encoder(data)
+    # pdb.set_trace()
     prev_latent, prev_action = state
     prev_actions = jnp.concatenate([
         prev_action[:, None], data['action'][:, :-1]], 1)
