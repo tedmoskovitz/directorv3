@@ -175,6 +175,7 @@ def make_env(config, **overrides):
       'loconav': 'embodied.envs.loconav:LocoNav',
       'pinpad': 'embodied.envs.pinpad:PinPad',
       'bsuite': 'embodied.envs.bsuite:BsuiteEnv',
+      'tabular-navigation': 'embodied.envs.tabular_navigation:TabularNavigationEnv',
   }[suite]
   if isinstance(ctor, str):
     module, cls = ctor.split(':')
