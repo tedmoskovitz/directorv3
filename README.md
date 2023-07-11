@@ -78,8 +78,16 @@ JAX-Metal runnable script (Doesnt work for now):
 ```sh
 python dreamerv3/train.py \
   --logdir ~/logdir/$(date "+%Y%m%d-%H%M%S") \
-  --configs bsuite --batch_size 16 --run.train_ratio 32 \
+  --configs tabular-navigation --batch_size 16 --run.train_ratio 32 \
   --jax.platform=METAL
+```
+
+Run on four rooms with CPU:
+```sh
+python dreamerv3/train.py \
+  --logdir ~/logdir/$(date "+%Y%m%d-%H%M%S") \
+  --configs tabular-navigation --batch_size 16 --run.train_ratio 32 \
+  --jax.platform=cpu
 ```
 
 
