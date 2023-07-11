@@ -90,6 +90,24 @@ python dreamerv3/train.py \
   --jax.platform=cpu
 ```
 
+Run on four rooms with CPU and with state abstraction:
+```sh
+python dreamerv3/train.py \
+  --logdir ~/logdir/$(date "+%Y%m%d-%H%M%S") \
+  --configs tabular-navigation --batch_size 16 --run.train_ratio 32 \
+  --jax.platform=cpu \
+  --use_state_abstraction=True
+```
+
+Run on pinpad:
+```sh
+python dreamerv3/train.py \
+  --logdir ~/logdir/$(date "+%Y%m%d-%H%M%S") \
+  --configs pinpad --batch_size 16 --run.train_ratio 32 \
+  --jax.platform=cpu \
+  --use_state_abstraction=True
+```
+
 
 Flexible training script:
 
