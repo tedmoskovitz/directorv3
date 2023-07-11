@@ -71,8 +71,17 @@ pip install -r requirements.txt
 Simple training script:
 
 ```sh
-python example.py
+rm -rf ~/logdir/run1 & python example.py
 ```
+
+JAX-Metal runnable script (Doesnt work for now):
+```sh
+python dreamerv3/train.py \
+  --logdir ~/logdir/$(date "+%Y%m%d-%H%M%S") \
+  --configs bsuite --batch_size 16 --run.train_ratio 32 \
+  --jax.platform=METAL
+```
+
 
 Flexible training script:
 
