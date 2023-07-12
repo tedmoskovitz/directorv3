@@ -118,7 +118,7 @@ def make_logger(parsed, logdir, step, config):
   ]
   if config.get('use_wandb', False):
     logging_outs.append(
-      embodied.logger.WandBOutput('episode/score', logdir, config))
+      embodied.logger.WandBOutput(config.wandb_project_name, '.*', logdir, config))
   logger = embodied.Logger(step, logging_outs, multiplier)
   return logger
 

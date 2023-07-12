@@ -31,6 +31,7 @@ class Ratio:
     self._prev = None
 
   def __call__(self, step):
+    """Return 1 every 1/ratio steps."""
     step = int(step)
     if self._ratio == 0:
       return 0

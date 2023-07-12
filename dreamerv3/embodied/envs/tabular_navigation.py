@@ -271,7 +271,7 @@ class TMaze(dm_env.Environment):
   def __init__(
     self,
     reset_goal: bool = False,
-    p_right: float = 0.5,
+    p_right: float = 1.0,  # 0.5
     max_steps: int = 12,
     observation_type: str = 'one-hot'):
     """Initializes the TMaze environment.
@@ -428,6 +428,7 @@ class TMaze(dm_env.Environment):
       done = True
 
     self._state = new_state
+    self._steps += 1
     if self._steps >= self._max_steps:
         done = True
 
