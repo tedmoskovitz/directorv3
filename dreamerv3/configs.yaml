@@ -132,6 +132,15 @@ defaults:
   adver_impl: squared
   manager_delta: False
   goal_kl: True
+  # State abstraction logic
+  use_state_abstraction: False  # This FLAG activates the state abstraction logic.
+  abstract_state_observations: [deter]
+  state_abstraction_encoder: {layers: 4, units: 128, act: elu, norm: layer, dist: onehot, outscale: 0.1, unimix: 0.0, inputs: [state]}
+  state_abstraction_decoder: {layers: 4, units: 128, act: elu, norm: layer, dist: mse, outscale: 0.1, inputs: [abstract_state]}
+  state_abstraction_shape: [16, 16]  
+  state_abstraction_kl: {impl: mult, scale: 0.0, target: 10.0, min: 1e-5, max: 1.0}
+  state_abstraction_opt: {opt: adam, lr: 1e-4, eps: 1e-6, clip: 100.0, wd: 1e-2, wd_pattern: 'kernel'}
+  use_state_abstraction_kl: True
 
 minecraft:
 
@@ -207,6 +216,18 @@ dmc_vision:
   encoder: {mlp_keys: '$^', cnn_keys: 'image'}
   decoder: {mlp_keys: '$^', cnn_keys: 'image'}
 
+# This config is arbigtrary, it could be changed
+pinpad:
+
+  task: pinpad_four
+  run.train_ratio: 512
+  rssm.deter: 512
+  .*\.cnn_depth: 32
+  .*\.layers: 2
+  .*\.units: 512
+  encoder: {mlp_keys: '$^', cnn_keys: 'image'}
+  decoder: {mlp_keys: '$^', cnn_keys: 'image'}
+
 dmc_proprio:
 
   task: dmc_walker_walk
@@ -231,6 +252,18 @@ bsuite:
   .*\.units: 512
   # encoder: {mlp_keys: '.*', cnn_keys: '$^'}
   # decoder: {mlp_keys: '.*', cnn_keys: '$^'}
+
+tabular-navigation:
+
+  task: tabular-navigation_fourrooms
+  envs: {amount: 1, parallel: none}
+  run:
+    script: train
+    train_ratio: 128  # To modify
+  rssm.deter: 512
+  .*\.cnn_depth: 32
+  .*\.layers: 2
+  .*\.units: 512
 
 loconav:
 

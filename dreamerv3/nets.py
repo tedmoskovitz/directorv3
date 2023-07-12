@@ -15,6 +15,9 @@ from . import ninjax as nj
 cast = jaxutils.cast_to_compute
 
 
+JAX_METAL_COMPATIBLE_BACKEND = False  # Enable if needed
+
+
 class RSSM(nj.Module):
 
   def __init__(
@@ -526,6 +529,7 @@ class Conv2D(nj.Module):
     self._winit = winit
     self._fan = fan
 
+
   def __call__(self, hidden):
     if self._preact:
       hidden = self._norm(hidden)
@@ -538,26 +542,43 @@ class Conv2D(nj.Module):
     return hidden
 
   def _layer(self, x):
+    dtype = x.dtype
     if self._transp:
       shape = (self._kernel, self._kernel, self._depth, x.shape[-1])
       kernel = self.get('kernel', Initializer(
           self._winit, fan=self._fan), shape)
-      kernel = jaxutils.cast_to_compute(kernel)
-      x = jax.lax.conv_transpose(
+      kernel = jaxutils.cast_to_compute(kernel) 
+      if JAX_METAL_COMPATIBLE_BACKEND:
+        # NEW: Due to Jax-METAL bug, we should not specify 'dimension_numbers', so we use the default
+        # The default for conv_transpose is ('NHWC', 'HWIO', 'NHWC'), rather than ('NHWC', 'HWOI', 'NHWC')
+        x = jaxutils.cast_to_compute(x)
+        x = jax.lax.conv_transpose(x, jnp.transpose(kernel, (0, 1, 3, 2)), (self._stride, self._stride), self._pad)
+      else:
+        # OLD:
+        x = jax.lax.conv_transpose(
           x, kernel, (self._stride, self._stride), self._pad,
           dimension_numbers=('NHWC', 'HWOI', 'NHWC'))
     else:
       shape = (self._kernel, self._kernel, x.shape[-1], self._depth)
       kernel = self.get('kernel', Initializer(
           self._winit, fan=self._fan), shape)
-      kernel = jaxutils.cast_to_compute(kernel)
-      x = jax.lax.conv_general_dilated(
+      kernel = jaxutils.cast_to_compute(kernel)      
+      if JAX_METAL_COMPATIBLE_BACKEND:
+        # NEW: Due to Jax-METAL bug, we should not specify 'dimension_numbers', so we use the default
+        # The default for conv_transpose is ('NCHW', 'OIHW', 'NCHW'), rather than ('NHWC', 'HWIO', 'NHWC')
+        x = jaxutils.cast_to_compute(x)
+        x = jax.lax.conv_general_dilated(jnp.transpose(x, (0, 3, 1, 2)), jnp.transpose(kernel, (3, 2, 0, 1)), (self._stride, self._stride), self._pad)
+        x = jnp.transpose(x, (0, 2, 3, 1))
+      else:
+        # OLD:
+        x = jax.lax.conv_general_dilated(
           x, kernel, (self._stride, self._stride), self._pad,
-          dimension_numbers=('NHWC', 'HWIO', 'NHWC'))
+          dimension_numbers=('NHWC', 'HWIO', 'NHWC'))      
     if self._bias:
       bias = self.get('bias', jnp.zeros, self._depth, np.float32)
       bias = jaxutils.cast_to_compute(bias)
       x += bias
+    x = x.astype(dtype)
     return x
 
 
@@ -576,6 +597,7 @@ class Linear(nj.Module):
     self._fan = fan
 
   def __call__(self, x):
+    dtype = x.dtype
     shape = (x.shape[-1], np.prod(self._units))
     kernel = self.get('kernel', Initializer(
         self._winit, self._outscale, fan=self._fan), shape)
@@ -588,8 +610,9 @@ class Linear(nj.Module):
     if len(self._units) > 1:
       x = x.reshape(x.shape[:-1] + self._units)
     x = self.get('norm', Norm, self._norm)(x)
-    x = self._act(x)
-    return x
+    # BUG on JAX-METAL: For computation, needs a cast for float32.
+    x = self._act(x.astype(jnp.float32))
+    return x.astype(dtype)
 
 
 class Norm(nj.Module):

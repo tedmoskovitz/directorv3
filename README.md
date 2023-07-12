@@ -71,8 +71,43 @@ pip install -r requirements.txt
 Simple training script:
 
 ```sh
-python example.py
+rm -rf ~/logdir/run1 & python example.py
 ```
+
+JAX-Metal runnable script (Doesnt work for now):
+```sh
+python dreamerv3/train.py \
+  --logdir ~/logdir/$(date "+%Y%m%d-%H%M%S") \
+  --configs tabular-navigation --batch_size 16 --run.train_ratio 32 \
+  --jax.platform=METAL
+```
+
+Run on four rooms with CPU:
+```sh
+python dreamerv3/train.py \
+  --logdir ~/logdir/$(date "+%Y%m%d-%H%M%S") \
+  --configs tabular-navigation --batch_size 16 --run.train_ratio 32 \
+  --jax.platform=cpu
+```
+
+Run on four rooms with CPU and with state abstraction:
+```sh
+python dreamerv3/train.py \
+  --logdir ~/logdir/$(date "+%Y%m%d-%H%M%S") \
+  --configs tabular-navigation --batch_size 16 --run.train_ratio 32 \
+  --jax.platform=cpu \
+  --use_state_abstraction=True
+```
+
+Run on pinpad:
+```sh
+python dreamerv3/train.py \
+  --logdir ~/logdir/$(date "+%Y%m%d-%H%M%S") \
+  --configs pinpad --batch_size 16 --run.train_ratio 32 \
+  --jax.platform=cpu \
+  --use_state_abstraction=True
+```
+
 
 Flexible training script:
 

@@ -7,18 +7,23 @@ def main():
 
   # See configs.yaml for all options.
   config = embodied.Config(dreamerv3.configs['defaults'])
-  config = config.update(dreamerv3.configs['medium'])
+  # config = config.update(dreamerv3.configs['medium'])
+  config = config.update(dreamerv3.configs['small'])
   config = config.update({
       'logdir': '~/logdir/run1',
       'run.train_ratio': 64,
       'run.log_every': 30,  # Seconds
       'batch_size': 16,
       'jax.prealloc': False,
+      # 'jax.jit': False,
+      'jax.precision': "float32",
+      # 'jax.debug': True,      
       'encoder.mlp_keys': '$^',
       'decoder.mlp_keys': '$^',
       'encoder.cnn_keys': 'image',
       'decoder.cnn_keys': 'image',
       # 'jax.platform': 'cpu',
+      'jax.platform': 'METAL',
   })
   config = embodied.Flags(config).parse()
 
@@ -45,6 +50,7 @@ def main():
   args = embodied.Config(
       **config.run, logdir=config.logdir,
       batch_steps=config.batch_size * config.batch_length)
+
   embodied.run.train(agent, env, replay, logger, args)
   # embodied.run.eval_only(agent, env, logger, args)
 
