@@ -376,6 +376,16 @@ class TMaze(dm_env.Environment):
       obs[row*self._empty_layout.shape[1] + col] = 1
       obs[-1] = goal_feat
       return obs
+    elif self._observation_type == 'image':
+      # return a 3x3 flattened image of the current state, with the current
+      # state of the agent in the middle
+      r2d = np.reshape(self.r, self._empty_layout.shape)
+      img = r2d[row-1:row+2, col-1:col+2]
+      img[1, 1] = 4  # agent
+      return img.flatten()
+      
+
+
 
   def idx_to_state_coords(self, obs) -> Tuple[int, int]:
     col= obs % self._empty_layout.shape[1]
@@ -442,6 +452,9 @@ class TMaze(dm_env.Environment):
     elif self._observation_type == 'one-hot':
       return specs.Array(
         shape=(self._empty_layout.size + 1,), dtype=np.float32, name='observation')
+    elif self._observation_type == 'image':
+      return specs.Array(
+        shape=(9,), dtype=np.float32, name='observation')
     else:
       raise ValueError('Observation type not supported')
   
