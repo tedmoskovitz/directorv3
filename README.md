@@ -108,6 +108,14 @@ python dreamerv3/train.py \
   --use_state_abstraction=True
 ```
 
+Run on t-maze:
+```
+python dreamerv3/train.py \
+  --logdir ~/logdir/$(date "+%Y%m%d-%H%M%S") \
+  --configs tmaze --batch_size 16 --run.train_ratio 32 \
+  --jax.platform=cpu
+```
+
 
 Flexible training script:
 
