@@ -217,17 +217,14 @@ class WorldModel(nj.Module):
       return {**state, 'action': action, 'carry': carry}
     
     # dict_keys(['action', 'carry', 'deter', 'logit', 'stoch'])
-    # traj[not 'carry'] is (15, 192, d_key)
-    # keys of traj['carry'] are (15, 192, d_key)
+    # traj[not 'carry'] is (horizon-1, 192, d_key)
+    # keys of traj['carry'] are (horizon-1, 192, d_key)
     traj = jaxutils.scan(step, jnp.arange(horizon), start, self.config.imag_unroll)
-    # I'm not entirely sure if carry should be flattened into traj or not. Going
-    # to assume yes, but if not, will need to do some kinf of tree_map of the
-    # dict comprehension below. 
     traj.update(traj['carry'])
     del traj['carry']
     start.update(start['carry'])
     del start['carry']
-    # add start back in -- now (16, 192, d_key)
+    # add start back in -- now (horizon, 192, d_key)
     traj = {k: jnp.concatenate(
       [start[k][None], v], 0) for k, v in traj.items()}
     

@@ -18,7 +18,7 @@ class FourRooms(dm_env.Environment):
       seed: int = 0,
       goals: Optional[List[int]] = None,
       goal_rewards: Optional[List[float]] = None,
-      observation_type: str = 'one-hot'):
+      observation_type: str = 'image'):
     """Initializes the FourRooms environment.
 
     Args:
@@ -300,6 +300,10 @@ class TMaze(dm_env.Environment):
         [W, W, W, W, W, W, W] 
     ])
 
+    self._idx2obs_idx = {
+      31: 0, 24: 1, 17: 2, 10: 3, 8: 4, 9: 5, 11: 6, 12: 7
+    }
+
     self._number_of_states = np.prod(np.shape(self._empty_layout))
     # reward
     flat_empty_layout = self._empty_layout.flatten()
@@ -372,21 +376,29 @@ class TMaze(dm_env.Environment):
     if self._observation_type == 'index':
       return np.array([row*self._empty_layout.shape[1] + col, goal_feat])
     elif self._observation_type == 'one-hot':
-      obs = np.zeros(self._number_of_states + 1)
-      obs[row*self._empty_layout.shape[1] + col] = 1
-      obs[-1] = goal_feat
+      n_states = len(self._idx2obs_idx)
+      obs = np.zeros(n_states + 2)
+      idx = row*self._empty_layout.shape[1] + col
+      goal_feat = np.eye(2)[max(goal_feat, 0)]
+      # obs[row*self._empty_layout.shape[1] + col] = 1
+      obs[:n_states] = np.eye(n_states)[self._idx2obs_idx[idx]]
+      obs[n_states:] = goal_feat
       return obs
-    elif self._observation_type == 'image':
+    elif self._observation_type == 'image-partial':
       # return a 3x3 flattened image of the current state, with the current
       # state of the agent in the middle
-      r2d = np.reshape(self.r, self._empty_layout.shape)
+      r2d = np.reshape(self.r, self._empty_layout.shape).copy()
       img = r2d[row-1:row+2, col-1:col+2]
       img[1, 1] = 4  # agent
       return img.flatten()
+    elif self._observation_type == 'image':
+      img = np.reshape(self.r, self._empty_layout.shape).copy()
+      # img = r2d[row-1:row+2, col-1:col+2]
+      img[row, col] = 4  # agent
+      # convert to grayscale image uint8
+      img = np.uint8(img * 255 / 4)
+      return img.reshape(6, 7, 1)
       
-
-
-
   def idx_to_state_coords(self, obs) -> Tuple[int, int]:
     col= obs % self._empty_layout.shape[1]
     row = obs // self._empty_layout.shape[1]
@@ -416,7 +428,7 @@ class TMaze(dm_env.Environment):
   def step(self, action: int) -> dm_env.TimeStep:
     done = False
     row, col = self._state
-    r2d = np.reshape(self.r, self._empty_layout.shape)
+    r2d = np.reshape(self.r, self._empty_layout.shape).copy()
     
     if action == 0:  # up
       new_state = (row - 1, col)
@@ -446,15 +458,29 @@ class TMaze(dm_env.Environment):
     discount = 0.0 if done else 1.0
     return dm_env.TimeStep(step_type, reward, discount, self.get_obs())
 
+  def render(self):
+    row, col = self._state
+    # return a 3x3 image of the current state, with the current
+    # state of the agent in the middle
+    img = np.reshape(self.r, self._empty_layout.shape).copy()
+    # img = r2d[row-1:row+2, col-1:col+2]
+    img[row, col] = 4  # agent
+    # convert to grayscale image uint8
+    img = np.uint8(img * 255 / 4)
+    return img.reshape(6, 7, 1)
+
   def observation_spec(self):
     if self._observation_type == 'index':
       return specs.Array((2,), dtype=np.int32, name='observation')
     elif self._observation_type == 'one-hot':
       return specs.Array(
-        shape=(self._empty_layout.size + 1,), dtype=np.float32, name='observation')
-    elif self._observation_type == 'image':
+        shape=(10,), dtype=np.float32, name='observation')
+    elif self._observation_type == 'image-partial':
       return specs.Array(
         shape=(9,), dtype=np.float32, name='observation')
+    elif self._observation_type == 'image':
+      return specs.Array(
+        shape=(6, 7, 1), dtype=np.uint8, name='image')
     else:
       raise ValueError('Observation type not supported')
   
@@ -466,8 +492,8 @@ NAME2ENV = dict(fourrooms=FourRooms, tmaze=TMaze,)
 
 class TabularNavigationEnv(embodied.Env):
 
-  def __init__(self, env, obs_key='observation', act_key='action'):
-    env = NAME2ENV[env]()
+  def __init__(self, env, obs_key='observation', act_key='action', **env_kwargs):
+    env = NAME2ENV[env](**env_kwargs)
     self._env = env
     obs_spec = self._env.observation_spec()
     act_spec = self._env.action_spec()
@@ -493,6 +519,7 @@ class TabularNavigationEnv(embodied.Env):
         'is_first': embodied.Space(bool),
         'is_last': embodied.Space(bool),
         'is_terminal': embodied.Space(bool),
+        'local_window': embodied.Space(np.uint8, self._env._empty_layout.shape + (1,)),
         **{k or self._obs_key: self._convert(v) for k, v in spec.items()},
     }
 
@@ -530,6 +557,7 @@ class TabularNavigationEnv(embodied.Env):
         reward=np.float32(0.0 if time_step.first() else time_step.reward),
         is_first=time_step.first(),
         is_last=time_step.last(),
+        local_window=self._env.render(),
         is_terminal=False if time_step.first() else time_step.discount == 0,
         **obs,
     )

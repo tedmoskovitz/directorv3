@@ -199,7 +199,7 @@ class MultiEncoder(nj.Module):
       mlp_units=512, cnn='resize', cnn_depth=48,
       cnn_blocks=2, resize='stride',
       symlog_inputs=False, minres=4, **kw):
-    excluded = ('is_first', 'is_last')
+    excluded = ('is_first', 'is_last', 'local_window')
     shapes = {k: v for k, v in shapes.items() if (
         k not in excluded and not k.startswith('log_'))}
     self.cnn_shapes = {k: v for k, v in shapes.items() if (

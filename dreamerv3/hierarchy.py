@@ -104,11 +104,9 @@ class Hierarchy(nj.Module):
             config.skill_shape, dims='context', **config.goal_encoder, name='encoder_mlp')
         self.dec = nets.MLP(
             self.goal_shape, dims='context', **self.config.goal_decoder, name='decoder_mlp')
-        # this is to automatically update the KL scaling -- theoretically we can
-        # avoid this now with Dreamer-v3
+        # this is to automatically update the KL scaling
         self.kl = jaxutils.AutoAdapt(
             (), **self.config.encdec_kl, name='goal-vae_kl-adapt')
-        # self.opt = tfutils.Optimizer('goal', **config.encdec_opt)
         # optimizer for goal autoencoder
         self.opt = jaxutils.Optimizer(**config.encdec_opt, name='autoenc_opt')
 
@@ -375,7 +373,6 @@ class Hierarchy(nj.Module):
         # with jnp.GradientTape() as tape:
         # enc is tensorflow_probability.substrates.jax.distributions.independent.Independent
         enc = self.enc({'goal': goal, 'context': context})
-        # TODO(ted): obviously need to change / generate a new key each time
         dec = self.dec({'skill': enc.sample(seed=nj.rng()), 'context': context})
         rec = -dec.log_prob(jaxutils.sg(goal))
         if self.config.goal_kl:
@@ -385,9 +382,9 @@ class Hierarchy(nj.Module):
             assert rec.shape == kl.shape, (rec.shape, kl.shape)
         else:
             kl = 0.0
-        # loss = (rec + kl).mean()
 
         def loss_fn(rec, kl): return (rec + kl).mean()
+        pdb.set_trace()
         metrics.update(self.opt([self.enc, self.dec], loss_fn, rec, kl))
         # metrics.update(self.opt(loss, [self.enc, self.dec]))
         metrics['goalrec_mean'] = rec.mean()
@@ -630,12 +627,16 @@ class Hierarchy(nj.Module):
 
     def report_worker(self, data, impl):
         # Prepare initial state.
+        # data['observation] is (batch_size, batch_length, observation_dim)
         decoder = self.wm.heads['decoder']
+        # take first 6 samples from the batch (Why?)
         states, _ = self.wm.rssm.observe(
             self.wm.encoder(data)[:6], data['action'][:6], data['is_first'][:6])
         start = {k: v[:, 4] for k, v in states.items()}
         start['is_terminal'] = data['is_terminal'][:6, 4]
         goal = self.propose_goal(start, impl)
+        # goal is (6, batch_length, state_dim)
+        # self.feat(states) is the same shape as goal
         # Worker rollout.
 
         def worker(s): return self.worker.actor({
