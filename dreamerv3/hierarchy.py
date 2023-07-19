@@ -372,23 +372,39 @@ class Hierarchy(nj.Module):
             goal = context = feat
         # with jnp.GradientTape() as tape:
         # enc is tensorflow_probability.substrates.jax.distributions.independent.Independent
-        enc = self.enc({'goal': goal, 'context': context})
-        dec = self.dec({'skill': enc.sample(seed=nj.rng()), 'context': context})
-        rec = -dec.log_prob(jaxutils.sg(goal))
-        if self.config.goal_kl:
-            kl = jaxutils.tfd.kl_divergence(enc, self.prior)
-            kl, mets = self.kl(kl)
-            metrics.update({f'goalkl_{k}': v for k, v in mets.items()})
-            assert rec.shape == kl.shape, (rec.shape, kl.shape)
-        else:
-            kl = 0.0
+        def loss_fn(goal, context):
+            local_metrics = {}
+            enc = self.enc({'goal': goal, 'context': context})
+            dec = self.dec({'skill': enc.sample(seed=nj.rng()), 'context': context})
+            rec = -dec.log_prob(jaxutils.sg(goal))
+            if self.config.goal_kl:
+                kl = jaxutils.tfd.kl_divergence(enc, self.prior)
+                kl, mets = self.kl(kl)
+                local_metrics.update({f'goalkl_{k}': v for k, v in mets.items()})
+                assert rec.shape == kl.shape, (rec.shape, kl.shape)
+            else:
+                kl = 0.0
 
-        def loss_fn(rec, kl): return (rec + kl).mean()
-        pdb.set_trace()
-        metrics.update(self.opt([self.enc, self.dec], loss_fn, rec, kl))
+            local_metrics['goalrec_mean'] = rec.mean()
+            local_metrics['goalrec_std'] = rec.std()
+            
+            return (rec + kl).mean(), local_metrics
+
+        # def loss_fn(rec, kl): return (rec + kl).mean()
+        # pdb.set_trace()
+        # metrics.update(self.opt([self.enc, self.dec], loss_fn, rec, kl))
+        # import pdb; pdb.set_trace()
+        mets, local_metrics = self.opt([self.enc, self.dec], loss_fn, goal, context, has_aux=True)
+        # metrics.update(self.opt([self.enc, self.dec], loss_fn, goal, context, has_aux=True))
+
+        # import pdb; pdb.set_trace()
+
+        # jax.debug.print('Grad Norm : {}', mets['autoenc_opt_grad_norm'])
         # metrics.update(self.opt(loss, [self.enc, self.dec]))
-        metrics['goalrec_mean'] = rec.mean()
-        metrics['goalrec_std'] = rec.std()
+        # metrics['goalrec_mean'] = rec.mean()
+        # metrics['goalrec_std'] = rec.std()
+        metrics.update(mets)
+        metrics.update(local_metrics)
 
         return metrics
 
