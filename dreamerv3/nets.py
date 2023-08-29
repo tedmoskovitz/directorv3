@@ -55,6 +55,7 @@ class RSSM(nj.Module):
       raise NotImplementedError(self._initial)
 
   def observe(self, embed, action, is_first, state=None):
+    # swap first two dimensions; usually [B, T] -> [T, B] (timestep first)
     swap = lambda x: x.transpose([1, 0] + list(range(2, len(x.shape))))
     if state is None:
       state = self.initial(action.shape[0])

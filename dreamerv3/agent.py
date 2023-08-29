@@ -100,6 +100,7 @@ class Agent(nj.Module):
     if self.expl_behavior is not self.task_behavior:
       mets = self.expl_behavior.report(data)
       report.update({f'expl_{k}': v for k, v in mets.items()})
+    
     return report
 
   def preprocess(self, obs):

@@ -22,6 +22,11 @@ class Hierarchy(nj.Module):
     def __init__(self, wm, act_space, config):
         self.wm = wm
         self.config = config
+        self.short_circuit_worker = config.get("short_circuit_worker", False)
+        if self.short_circuit_worker:
+            assert np.prod(config.skill_shape) == np.prod(act_space.shape), "Incompatible skill shape for short-circuiting" 
+            assert not config.goal_kl, "Goal KL must be off for short-circuiting."
+            assert config.jointly == 'off', "Must separate training for short-circuiting."
         self.extr_reward = lambda traj: self.wm.heads['reward'](traj).mean()[
             1:]
         self.skill_space = embodied.Space(
@@ -81,6 +86,7 @@ class Hierarchy(nj.Module):
         }, config.manager_rews, self.skill_space, mconfig, name='manager')
         if self.config.expl_rew == 'disag':
             self.expl_reward = expl.Disag(wm, act_space, config)
+            
         elif self.config.expl_rew == 'adver':
             self.expl_reward = self.elbo_reward
         else:
@@ -109,6 +115,12 @@ class Hierarchy(nj.Module):
             (), **self.config.encdec_kl, name='goal-vae_kl-adapt')
         # optimizer for goal autoencoder
         self.opt = jaxutils.Optimizer(**config.encdec_opt, name='autoenc_opt')
+        # update counter
+        self._update_count = nj.Variable(jnp.zeros, (), jnp.int64, name='update_count')
+        self._alternate_frequency = -1 if not config.alternate_frequency else config.alternate_frequency
+        train_manager_init = jnp.ones if self._alternate_frequency < 0 else jnp.zeros
+        self._train_manager = nj.Variable(train_manager_init, (), bool, name='train_manager')
+        self._train_worker = nj.Variable(jnp.ones, (), bool, name='train_worker')
 
     def initial(self, batch_size):
         return {
@@ -137,12 +149,21 @@ class Hierarchy(nj.Module):
           abstract_state = state_abstraction_dist.sample(seed=nj.rng())
           manager_inputs['abstract_state'] = abstract_state
 
+
+        if self.short_circuit_worker:
+            # note that automatically "switch" every step in this case
+            dist = self.manager.actor(jaxutils.sg(manager_inputs))
+            carry = {'step': carry['step'] + 1, 'skill': carry['skill'], 'goal': carry['goal']}
+            return {'action': dist}, carry
+
         # Skill is 'z' sampled from Manager.
+        # skill is [batch_length * batch_size, *skill_shape]
         skill = jaxutils.sg(switch(carry['skill'],
                                    self.manager.actor(jaxutils.sg(manager_inputs)).sample(seed=nj.rng())))
         new_goal = self.dec(
             {'skill': skill, 'context': self.feat(latent)}).mode()
-        # Q: Why do we sum up feat(latent) & new_goal ?
+        # setting manager_delta == True means that the goal is really a delta
+        # in state rather than a proposed state
         new_goal = (
             self.feat(latent).astype(jnp.float32) + new_goal
             if self.config.manager_delta else new_goal)
@@ -153,15 +174,31 @@ class Hierarchy(nj.Module):
         delta = goal - self.feat(latent).astype(jnp.float32)
         dist = self.worker.actor(jaxutils.sg(
             {**latent, 'goal': goal, 'delta': delta}))
+        # dist is a jaxutils dist with shape [batch_length * batch_size, action_dim]
         outs = {'action': dist}
         if 'image' in self.wm.heads['decoder'].shapes:
             outs['log_goal'] = self.wm.heads['decoder']({
                 'deter': goal, 'stoch': self.wm.rssm.get_stoch(goal),
             })['image'].mode()
         carry = {'step': carry['step'] + 1, 'skill': skill, 'goal': goal}
+        # outs = {'action': action_dist (batch_size * batch_length, *action.shape)}
+        # carry['skill'] is [batch_size*batch_length, *skill.shape]
+        # carry['goal'] is [batch_size*batch_length, rssm.deter size]
         return outs, carry
 
     def train(self, imagine, start, data):
+        # increment update count
+        self._update_count.write(self._update_count.read() + 1)
+        def flip_train(train_manager, train_worker):
+            return jnp.logical_not(train_manager), jnp.logical_not(train_worker)
+        def nothing(train_manager, train_worker):
+            return train_manager, train_worker
+        train_manager, train_worker = jax.lax.cond(
+            self._alternate_frequency > 0 and jnp.mod(self._update_count.read(), self._alternate_frequency) == 0,
+            flip_train, nothing, self._train_manager.read(), self._train_worker.read())
+            
+        self._train_manager.write(train_manager)
+        self._train_worker.write(train_worker)
         def success(rew): return (rew[-1] > 0.7).astype(jnp.float32).mean()
         metrics = {}
         if self.config.expl_rew == 'disag':
@@ -183,7 +220,9 @@ class Hierarchy(nj.Module):
                 goal = self.feat(traj)[-1]
                 metrics.update(self.train_worker(imagine, start, goal)[1])
         if self.config.jointly == 'new':
-            traj, mets = self.train_jointly(imagine, start)
+            traj, mets = self.train_jointly(
+                imagine, start,
+                train_manager=train_manager, train_worker=train_worker)
             metrics.update(mets)
             metrics['success_manager'] = success(traj['reward_goal'])
             if self.config.vae_imag:
@@ -195,13 +234,14 @@ class Hierarchy(nj.Module):
             if self.config.vae_imag:
                 metrics.update(self.train_vae_imag(traj))
         elif self.config.jointly == 'off':
-            for impl in self.config.worker_goals:
-                goal = self.propose_goal(start, impl)
-                traj, mets = self.train_worker(imagine, start, goal)
-                metrics.update(mets)
-                metrics[f'success_{impl}'] = success(traj['reward_goal'])
-                if self.config.vae_imag:
-                    metrics.update(self.train_vae_imag(traj))
+            if not self.short_circuit_worker:
+                for impl in self.config.worker_goals:
+                    goal = self.propose_goal(start, impl)
+                    traj, mets = self.train_worker(imagine, start, goal)
+                    metrics.update(mets)
+                    metrics[f'success_{impl}'] = success(traj['reward_goal'])
+                    if self.config.vae_imag:
+                        metrics.update(self.train_vae_imag(traj))
             traj, mets = self.train_manager(imagine, start)
             metrics.update(mets)
             metrics['success_manager'] = success(traj['reward_goal'])
@@ -209,7 +249,7 @@ class Hierarchy(nj.Module):
             raise NotImplementedError(self.config.jointly)
         return None, metrics
 
-    def train_jointly(self, imagine, start):
+    def train_jointly(self, imagine, start, train_manager=True, train_worker=True):
         start = start.copy()
         policy = functools.partial(self.policy, imag=True)
         # carry is an HRL dict containing 'step', 'skill', and 'goal'
@@ -226,14 +266,14 @@ class Hierarchy(nj.Module):
             worker_loss, worker_metrics = self.worker.loss(wtraj)
             worker_metrics = {"worker_" + k: v for k,
                               v in worker_metrics.items()}
-            return worker_loss, (traj, worker_metrics, wtraj)
+            return train_worker.astype(jnp.float32) * worker_loss, (traj, worker_metrics, wtraj)
 
         def manager_loss(traj):
             mtraj = self.abstract_traj(traj)
             manager_loss, manager_metrics = self.manager.loss(mtraj)
             manager_metrics = {"manager_" + k: v for k,
                                v in manager_metrics.items()}
-            return manager_loss, (traj, manager_metrics, mtraj)
+            return train_manager.astype(jnp.float32) * manager_loss, (traj, manager_metrics, mtraj)
 
         ########################################################################
         #
@@ -242,6 +282,7 @@ class Hierarchy(nj.Module):
         ########################################################################
 
         # update the worker actor
+        # lambda dummy_opt: actor, loss, traj, has_aux = 
         wmets, (traj, worker_metrics, wtraj) = self.worker.opt(
             self.worker.actor, worker_loss, traj, has_aux=True)
         worker_metrics.update(wmets)
@@ -250,24 +291,90 @@ class Hierarchy(nj.Module):
             cwmets = critic.train(wtraj, self.worker.actor)
             worker_metrics.update(
                 {f'{key}_worker-critic_{k}': v for k, v in cwmets.items()})
+        worker_metrics['worker_actor_opt_loss'] = worker_metrics['actor_opt_loss']
+        
+
 
         ########################################################################
         #
         # MANAGER TRAINING
         #
         ########################################################################
-
         # update the manager actor
         mmets, (traj, manager_metrics, mtraj) = self.manager.opt(
             self.manager.actor, manager_loss, traj, has_aux=True)
         manager_metrics.update(mmets)
         # update the manager critic
         for key, critic in self.manager.critics.items():
-            mwmets = critic.train(mtraj, self.manager.actor)
+            mmets = critic.train(mtraj, self.manager.actor)
             manager_metrics.update(
-                {f'{key}_manager-critic_{k}': v for k, v in mwmets.items()})
+                {f'{key}_manager-critic_{k}': v for k, v in mmets.items()})
+        manager_metrics['manager_actor_opt_loss'] = manager_metrics['actor_opt_loss']
 
         return traj, {**worker_metrics, **manager_metrics}
+
+    def train_jointly0(self, imagine, start, train_manager=True, train_worker=True):
+        start = start.copy()
+        policy = functools.partial(self.policy, imag=True)
+        traj = self.wm.imagine_carry(
+            policy, start, self.config.imag_horizon,
+            self.initial(len(start['is_first'])))
+        traj['reward_extr'] = self.extr_reward(traj)
+        traj['reward_expl'] = self.expl_reward(traj)
+        traj['reward_goal'] = self.goal_reward(traj)
+        traj['delta'] = traj['goal'] - self.feat(traj).astype(jnp.float32)
+
+        worker_metrics = {}
+        manager_metrics = {}
+
+        worker_metrics_keys = ['worker_actor_opt_loss'] + [f'{key}_worker-critic_{k}' for key in self.worker.critics.keys() for k in ['loss', 'grad_norm']]
+        manager_metrics_keys = ['manager_actor_opt_loss'] + [f'{key}_manager-critic_{k}' for key in self.manager.critics.keys() for k in ['loss', 'grad_norm']]
+
+        no_op_worker_fn = lambda traj: {key: 0.0 for key in worker_metrics_keys}
+        no_op_manager_fn = lambda traj: {key: 0.0 for key in manager_metrics_keys}
+
+        def train_worker_fn(traj):
+            def worker_loss(traj):
+                wtraj = self.split_traj(traj)
+                worker_loss, worker_metrics = self.worker.loss(wtraj)
+                worker_metrics = {"worker_" + k: v for k, v in worker_metrics.items()}
+                return worker_loss, (traj, worker_metrics, wtraj)
+
+            wmets, (traj, worker_metrics, wtraj) = self.worker.opt(
+                self.worker.actor, worker_loss, traj, has_aux=True)
+            worker_metrics.update(wmets)
+
+            for key, critic in self.worker.critics.items():
+                cwmets = critic.train(wtraj, self.worker.actor)
+                worker_metrics.update(
+                    {f'{key}_worker-critic_{k}': v for k, v in cwmets.items()})
+            worker_metrics['worker_actor_opt_loss'] = worker_metrics['actor_opt_loss']
+            return worker_metrics
+
+        worker_metrics = jax.lax.cond(train_worker, lambda _: train_worker_fn(traj), lambda _: no_op_worker_fn(traj), operand=None)
+
+        def train_manager_fn(traj):
+            def manager_loss(traj):
+                mtraj = self.abstract_traj(traj)
+                manager_loss, manager_metrics = self.manager.loss(mtraj)
+                manager_metrics = {"manager_" + k: v for k, v in manager_metrics.items()}
+                return manager_loss, (traj, manager_metrics, mtraj)
+
+            mmets, (traj, manager_metrics, mtraj) = self.manager.opt(
+                self.manager.actor, manager_loss, traj, has_aux=True)
+            manager_metrics.update(mmets)
+
+            for key, critic in self.manager.critics.items():
+                mmets = critic.train(mtraj, self.manager.actor)
+                manager_metrics.update(
+                    {f'{key}_manager-critic_{k}': v for k, v in mmets.items()})
+            manager_metrics['manager_actor_opt_loss'] = manager_metrics['actor_opt_loss']
+            return manager_metrics
+
+        manager_metrics = jax.lax.cond(train_manager, lambda _: train_manager_fn(traj), lambda _: no_op_manager_fn(traj), operand=None)
+
+        return traj, {**worker_metrics, **manager_metrics}
+
 
     def train_jointly_old(self, imagine, start):
         # start = start.copy()
@@ -299,9 +406,23 @@ class Hierarchy(nj.Module):
         raise NotImplementedError
 
     def train_manager(self, imagine, start):
+        # start = start.copy()
+        # # with jnp.GradientTape(persistent=True) as tape:
+        # policy = functools.partial(self.policy, imag=True)
+        # traj = self.wm.imagine_carry(
+        #     policy, start, self.config.imag_horizon,
+        #     self.initial(len(start['is_first'])))
+        # traj['reward_extr'] = self.extr_reward(traj)
+        # traj['reward_expl'] = self.expl_reward(traj)
+        # traj['reward_goal'] = self.goal_reward(traj)
+        # traj['delta'] = traj['goal'] - self.feat(traj).astype(jnp.float32)
+        # mtraj = self.abstract_traj(traj)
+        # metrics = self.manager.update(mtraj)  # , tape)
+        # metrics = {f'manager_{k}': v for k, v in metrics.items()}
+
         start = start.copy()
-        # with jnp.GradientTape(persistent=True) as tape:
         policy = functools.partial(self.policy, imag=True)
+        # carry is an HRL dict containing 'step', 'skill', and 'goal'
         traj = self.wm.imagine_carry(
             policy, start, self.config.imag_horizon,
             self.initial(len(start['is_first'])))
@@ -309,27 +430,68 @@ class Hierarchy(nj.Module):
         traj['reward_expl'] = self.expl_reward(traj)
         traj['reward_goal'] = self.goal_reward(traj)
         traj['delta'] = traj['goal'] - self.feat(traj).astype(jnp.float32)
-        mtraj = self.abstract_traj(traj)
-        metrics = self.manager.update(mtraj)  # , tape)
-        metrics = {f'manager_{k}': v for k, v in metrics.items()}
-        return traj, metrics
+
+        def manager_loss(traj):
+            mtraj = self.abstract_traj(traj)
+            manager_loss, manager_metrics = self.manager.loss(mtraj)
+            manager_metrics = {"manager_" + k: v for k,
+                               v in manager_metrics.items()}
+            return manager_loss, (traj, manager_metrics, mtraj)
+
+
+        # update the manager actor
+        mmets, (traj, manager_metrics, mtraj) = self.manager.opt(
+            self.manager.actor, manager_loss, traj, has_aux=True)
+        manager_metrics.update(mmets)
+        # update the manager critic
+        for key, critic in self.manager.critics.items():
+            mmets = critic.train(mtraj, self.manager.actor)
+            manager_metrics.update(
+                {f'{key}_manager-critic_{k}': v for k, v in mmets.items()})
+        manager_metrics['manager_actor_opt_loss'] = manager_metrics['actor_opt_loss']
+        return traj, manager_metrics
 
     def train_worker(self, imagine, start, goal):
-        start = start.copy()
-        metrics = {}
-        # with jnp.GradientTape(persistent=True) as tape:
-
+        # start = start.copy()
+        # metrics = {}
         def worker(s): return self.worker.actor(jaxutils.sg({
             **s, 'goal': goal, 'delta': goal - self.feat(s).astype(jnp.float32),
         })).sample(seed=nj.rng())
-        traj = imagine(worker, start, self.config.imag_horizon)
-        traj['goal'] = jnp.repeat(goal[None], 1 + self.config.imag_horizon, 0)
+        # traj = imagine(worker, start, self.config.imag_horizon)
+        # traj['goal'] = jnp.repeat(goal[None], 1 + self.config.imag_horizon, 0)
+        # traj['reward_extr'] = self.extr_reward(traj)
+        # traj['reward_expl'] = self.expl_reward(traj)
+        # traj['reward_goal'] = self.goal_reward(traj)
+        # traj['delta'] = traj['goal'] - self.feat(traj).astype(jnp.float32)
+        # mets = self.worker.update(traj)  # , tape)
+        # metrics.update({f'worker_{k}': v for k, v in mets.items()})
+        traj = self.wm.imagine_carry(
+            worker, start, self.config.imag_horizon,
+            self.initial(len(start['is_first'])))
         traj['reward_extr'] = self.extr_reward(traj)
         traj['reward_expl'] = self.expl_reward(traj)
         traj['reward_goal'] = self.goal_reward(traj)
         traj['delta'] = traj['goal'] - self.feat(traj).astype(jnp.float32)
-        mets = self.worker.update(traj)  # , tape)
-        metrics.update({f'worker_{k}': v for k, v in mets.items()})
+
+        def worker_loss(traj):
+            wtraj = self.split_traj(traj)
+            worker_loss, worker_metrics = self.worker.loss(wtraj)
+            worker_metrics = {"worker_" + k: v for k,
+                              v in worker_metrics.items()}
+            return train_worker.astype(jnp.float32) * worker_loss, (traj, worker_metrics, wtraj)
+
+        
+        # update the worker actor
+        wmets, (traj, worker_metrics, wtraj) = self.worker.opt(
+            self.worker.actor, worker_loss, traj, has_aux=True)
+        worker_metrics.update(wmets)
+        # update the worker critic
+        for key, critic in self.worker.critics.items():
+            cwmets = critic.train(wtraj, self.worker.actor)
+            worker_metrics.update(
+                {f'{key}_worker-critic_{k}': v for k, v in cwmets.items()})
+        worker_metrics['worker_actor_opt_loss'] = worker_metrics['actor_opt_loss']
+
         return traj, metrics
 
     def train_state_abstraction(self, data):
@@ -370,8 +532,8 @@ class Hierarchy(nj.Module):
                 goal = feat[:, self.config.train_skill_duration:]
         else:
             goal = context = feat
-        # with jnp.GradientTape() as tape:
         # enc is tensorflow_probability.substrates.jax.distributions.independent.Independent
+        # goal is (batch_size, batch_length, goal_dim ( = rssm.deter))
         def loss_fn(goal, context):
             local_metrics = {}
             enc = self.enc({'goal': goal, 'context': context})
@@ -391,13 +553,9 @@ class Hierarchy(nj.Module):
             return (rec + kl).mean(), local_metrics
 
         # def loss_fn(rec, kl): return (rec + kl).mean()
-        # pdb.set_trace()
         # metrics.update(self.opt([self.enc, self.dec], loss_fn, rec, kl))
-        # import pdb; pdb.set_trace()
         mets, local_metrics = self.opt([self.enc, self.dec], loss_fn, goal, context, has_aux=True)
         # metrics.update(self.opt([self.enc, self.dec], loss_fn, goal, context, has_aux=True))
-
-        # import pdb; pdb.set_trace()
 
         # jax.debug.print('Grad Norm : {}', mets['autoenc_opt_grad_norm'])
         # metrics.update(self.opt(loss, [self.enc, self.dec]))
@@ -561,13 +719,13 @@ class Hierarchy(nj.Module):
         enc = self.enc({'goal': feat, 'context': context})
         dec = self.dec({'skill': enc.sample(
             seed=nj.rng()), 'context': context})
-        ll = dec.log_prob(feat)
-        kl = jaxutils.tfd.kl_divergence(enc, self.prior)
         if self.config.adver_impl == 'abs':
             return jnp.abs(dec.mode() - feat).mean(-1)[1:]
         elif self.config.adver_impl == 'squared':
             return ((dec.mode() - feat) ** 2).mean(-1)[1:]
-        elif self.config.adver_impl == 'elbo_scaled':
+        ll = dec.log_prob(feat)
+        kl = jaxutils.tfd.kl_divergence(enc, self.prior)
+        if self.config.adver_impl == 'elbo_scaled':
             return (kl - ll / self.kl.scale())[1:]
         elif self.config.adver_impl == 'elbo_unscaled':
             return (kl - ll)[1:]
@@ -603,7 +761,8 @@ class Hierarchy(nj.Module):
         # So, the 'skill' in high-level means the high-level action
         traj['action'] = traj.pop('skill')
         k = self.config.train_skill_duration
-        # We chunk data by skill duration: Why ?
+        # We chunk data by skill duration because every manager "timestep"
+        # is really k timesteps
         def reshape(x): return x.reshape(
             [x.shape[0] // k, k] + list(x.shape[1:]))
         weights = jnp.cumprod(reshape(traj['cont'][:-1]), 1)
@@ -637,11 +796,16 @@ class Hierarchy(nj.Module):
     def report(self, data):
         metrics = {}
         for impl in ('manager', 'prior', 'replay'):
+            # for manager, make a video of the decoded goals, for prior it's 
+            # samples of z from the prior then decoded, for replay it's the 
+            # goal ae
             for key, video in self.report_worker(data, impl).items():
                 metrics[f'impl_{impl}_{key}'] = video
         return metrics
 
     def report_worker(self, data, impl):
+        if self.short_circuit_worker:
+            return {}
         # Prepare initial state.
         # data['observation] is (batch_size, batch_length, observation_dim)
         decoder = self.wm.heads['decoder']
@@ -665,16 +829,36 @@ class Hierarchy(nj.Module):
         target = decoder(
             {'deter': goal, 'stoch': self.wm.rssm.get_stoch(goal)})
         rollout = decoder(traj)
-        # Stich together into videos.
+        # Stich together into videos. Currently, rollout['observation'] is a 
+        # SymLogDist; have mean(), mode(); they're [B, T, D] with the tabular envs
         videos = {}
         for k in rollout.keys():
-            if k not in decoder.cnn_shapes:
+            if k not in decoder.cnn_shapes and k not in ['observation']:
                 continue
-            length = 1 + self.config.worker_report_horizon
-            rows = []
-            rows.append(jnp.repeat(initial[k].mode()[:, None], length, 1))
-            if target is not None:
-                rows.append(jnp.repeat(target[k].mode()[:, None], length, 1))
-            rows.append(rollout[k].mode().transpose((1, 0, 2, 3, 4)))
-            videos[k] = jaxutils.video_grid(jnp.concatenate(rows, 2))
+            if k in decoder.cnn_shapes:
+                length = 1 + self.config.worker_report_horizon
+                rows = []
+                rows.append(jnp.repeat(initial[k].mode()[:, None], length, 1))
+                if target is not None:
+                    rows.append(jnp.repeat(target[k].mode()[:, None], length, 1))
+                rows.append(rollout[k].mode().transpose((1, 0, 2, 3, 4)))
+                # input to video_grid should be B, T, H, W, C 
+                videos[k] = jaxutils.video_grid(jnp.concatenate(rows, 2))
+            elif k == 'observation':
+                # assume size [B, T, D]
+                # for T-Maze. D = 10. First 8 dims are the env states, final two
+                # is a one-hot representation of the goal. 
+                # For now, let's just reshape to [B, T, 1, D, 1]
+                B, T, D = rollout[k].mode().shape
+                frame_extracts = rollout[k].mode().reshape(B, T, 1, D, 1)
+                t_central = frame_extracts[:, :, 0, :4 :]
+                t_left = frame_extracts[:, :, 0, 4:6, :]
+                t_right = frame_extracts[:, :, 0, 6:8, :]
+                frame = -jnp.ones((B, T, 6, 7, 1))
+                # update blank_frame with the goal representation
+                frame = frame.at[:, :, 1:5, 3, :].set(t_central)
+                frame = frame.at[:, :, 1, 1:3, :].set(t_left)
+                frame = frame.at[:, :, 1, 4:6, :].set(t_right)
+                videos[k] = jaxutils.video_grid(frame)
+
         return videos

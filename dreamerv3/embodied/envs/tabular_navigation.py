@@ -286,7 +286,7 @@ class TMaze(dm_env.Environment):
     # -1: wall
     # 0: empty, episode continues
     # other: number indicates reward, episode will terminate
-    W = -1
+    W = -0.25
     G = 10
     self._W = W  # wall
     self._G = G  # goal
