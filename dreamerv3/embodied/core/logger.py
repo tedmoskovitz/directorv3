@@ -29,9 +29,8 @@ class Logger:
       name = f'{prefix}/{name}' if prefix else name
       value = np.asarray(value)
       if len(value.shape) not in (0, 1, 2, 3, 4):
-        raise ValueError(
-            f"Shape {value.shape} for name '{name}' cannot be "
-            "interpreted as scalar, histogram, image, or video.")
+        raise ValueError(f"Shape {value.shape} for name '{name}' cannot be "
+                         "interpreted as scalar, histogram, image, or video.")
       self._metrics.append((step, name, value))
 
   def scalar(self, name, value):
@@ -136,8 +135,11 @@ class TerminalOutput:
 
 class JSONLOutput(AsyncOutput):
 
-  def __init__(
-      self, logdir, filename='metrics.jsonl', pattern=r'.*', parallel=True):
+  def __init__(self,
+               logdir,
+               filename='metrics.jsonl',
+               pattern=r'.*',
+               parallel=True):
     super().__init__(self._write, parallel)
     self._filename = filename
     self._pattern = re.compile(pattern)
@@ -150,8 +152,11 @@ class JSONLOutput(AsyncOutput):
       if len(value.shape) == 0 and self._pattern.search(name):
         bystep[step][name] = float(value)
     lines = ''.join([
-        json.dumps({'step': step, **scalars}) + '\n'
-        for step, scalars in bystep.items()])
+        json.dumps({
+            'step': step,
+            **scalars
+        }) + '\n' for step, scalars in bystep.items()
+    ])
     with (self._logdir / self._filename).open('a') as f:
       f.write(lines)
 
@@ -180,8 +185,9 @@ class TensorBoardOutput(AsyncOutput):
       self._promise = self._checker.submit(self._check)
     if not self._writer or reset:
       print('Creating new TensorBoard event file writer.')
-      self._writer = tf.summary.create_file_writer(
-          self._logdir, flush_millis=1000, max_queue=10000)
+      self._writer = tf.summary.create_file_writer(self._logdir,
+                                                   flush_millis=1000,
+                                                   max_queue=10000)
     self._writer.set_as_default()
     for step, name, value in summaries:
       try:
@@ -229,15 +235,15 @@ class TensorBoardOutput(AsyncOutput):
 
 class WandBOutput:
 
-  def __init__(self, project_name, pattern, logdir, config):
+  def __init__(self, project_name, pattern, logdir, exp_name_prefix, config):
     self._pattern = re.compile(pattern)
     import wandb
     # pdb.set_trace()
     wandb.init(
         project=project_name,
-        name=logdir.name,
-        # sync_tensorboard=True,,
-        # entity='word-bots',
+        name=f'{exp_name_prefix}_{logdir.name}',
+    # sync_tensorboard=True,,
+    # entity='word-bots',
         config=dict(config),
     )
     self._wandb = wandb
@@ -314,7 +320,8 @@ def _encode_gif(frames, fps):
       'ffmpeg -y -f rawvideo -vcodec rawvideo',
       f'-r {fps:.02f} -s {w}x{h} -pix_fmt {pxfmt} -i - -filter_complex',
       '[0:v]split[x][z];[z]palettegen[y];[x]fifo[x];[x][y]paletteuse',
-      f'-r {fps:.02f} -f gif -'])
+      f'-r {fps:.02f} -f gif -'
+  ])
   proc = Popen(cmd.split(' '), stdin=PIPE, stdout=PIPE, stderr=PIPE)
   for image in frames:
     proc.stdin.write(image.tobytes())

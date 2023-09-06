@@ -1,5 +1,6 @@
 import jax.numpy as jnp
 from tensorflow_probability.substrates import jax as tfp
+
 tfd = tfp.distributions
 
 from . import agent
@@ -7,7 +8,9 @@ from . import expl
 from . import ninjax as nj
 from . import jaxutils
 
-from .hierarchy import Hierarchy  # noqa
+from .hierarchy import Hierarchy    # noqa
+from .hierarchy_clean import FeudalHRL    # noqa
+
 
 class Greedy(nj.Module):
 
@@ -17,8 +20,10 @@ class Greedy(nj.Module):
       critics = {'extr': agent.VFunction(rewfn, config, name='critic')}
     else:
       raise NotImplementedError(config.critic_type)
-    self.ac = agent.ImagActorCritic(
-        critics, {'extr': 1.0}, act_space, config, name='ac')
+    self.ac = agent.ImagActorCritic(critics, {'extr': 1.0},
+                                    act_space,
+                                    config,
+                                    name='ac')
 
   def initial(self, batch_size):
     return self.ac.initial(batch_size)
@@ -76,13 +81,15 @@ class Explore(nj.Module):
         rewfn = lambda s: wm.heads['reward'](s).mean()[1:]
         critics[key] = agent.VFunction(rewfn, config, name=key)
       else:
-        rewfn = self.REWARDS[key](
-            wm, act_space, config, name=key + '_reward')
+        rewfn = self.REWARDS[key](wm, act_space, config, name=key + '_reward')
         critics[key] = agent.VFunction(rewfn, config, name=key)
         self.rewards[key] = rewfn
     scales = {k: v for k, v in config.expl_rewards.items() if v}
-    self.ac = agent.ImagActorCritic(
-        critics, scales, act_space, config, name='ac')
+    self.ac = agent.ImagActorCritic(critics,
+                                    scales,
+                                    act_space,
+                                    config,
+                                    name='ac')
 
   def initial(self, batch_size):
     return self.ac.initial(batch_size)

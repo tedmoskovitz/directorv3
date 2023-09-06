@@ -3,14 +3,21 @@ import jax
 import jax.numpy as jnp
 import ruamel.yaml as yaml
 import pdb
+
 tree_map = jax.tree_util.tree_map
 sg = lambda x: tree_map(jax.lax.stop_gradient, x)
 
 import logging
+
 logger = logging.getLogger()
+
+
 class CheckTypesFilter(logging.Filter):
+
   def filter(self, record):
     return 'check_types' not in record.getMessage()
+
+
 logger.addFilter(CheckTypesFilter())
 
 from . import behaviors
@@ -32,19 +39,23 @@ class Agent(nj.Module):
     self.act_space = act_space['action']
     self.step = step
     self.wm = WorldModel(obs_space, act_space, config, name='wm')
-    self.task_behavior = getattr(behaviors, config.task_behavior)(
-        self.wm, self.act_space, self.config, name='task_behavior')
+    self.task_behavior = getattr(behaviors,
+                                 config.task_behavior)(self.wm,
+                                                       self.act_space,
+                                                       self.config,
+                                                       name='task_behavior')
     if config.expl_behavior == 'None':
       self.expl_behavior = self.task_behavior
     else:
-      self.expl_behavior = getattr(behaviors, config.expl_behavior)(
-          self.wm, self.act_space, self.config, name='expl_behavior')
+      self.expl_behavior = getattr(behaviors,
+                                   config.expl_behavior)(self.wm,
+                                                         self.act_space,
+                                                         self.config,
+                                                         name='expl_behavior')
 
   def policy_initial(self, batch_size):
-    return (
-        self.wm.initial(batch_size),
-        self.task_behavior.initial(batch_size),
-        self.expl_behavior.initial(batch_size))
+    return (self.wm.initial(batch_size), self.task_behavior.initial(batch_size),
+            self.expl_behavior.initial(batch_size))
 
   def train_initial(self, batch_size):
     return self.wm.initial(batch_size)
@@ -54,8 +65,8 @@ class Agent(nj.Module):
     obs = self.preprocess(obs)
     (prev_latent, prev_action), task_state, expl_state = state
     embed = self.wm.encoder(obs)
-    latent, _ = self.wm.rssm.obs_step(
-        prev_latent, prev_action, embed, obs['is_first'])
+    latent, _ = self.wm.rssm.obs_step(prev_latent, prev_action, embed,
+                                      obs['is_first'])
     self.expl_behavior.policy(latent, expl_state)
     task_outs, task_state = self.task_behavior.policy(latent, task_state)
     expl_outs, expl_state = self.expl_behavior.policy(latent, expl_state)
@@ -100,7 +111,7 @@ class Agent(nj.Module):
     if self.expl_behavior is not self.task_behavior:
       mets = self.expl_behavior.report(data)
       report.update({f'expl_{k}': v for k, v in mets.items()})
-    
+
     return report
 
   def preprocess(self, obs):
@@ -130,7 +141,8 @@ class WorldModel(nj.Module):
     self.heads = {
         'decoder': nets.MultiDecoder(shapes, **config.decoder, name='dec'),
         'reward': nets.MLP((), **config.reward_head, name='rew'),
-        'cont': nets.MLP((), **config.cont_head, name='cont')}
+        'cont': nets.MLP((), **config.cont_head, name='cont')
+    }
     self.opt = jaxutils.Optimizer(name='model_opt', **config.model_opt)
     scales = self.config.loss_scales.copy()
     image, vector = scales.pop('image'), scales.pop('vector')
@@ -145,8 +157,11 @@ class WorldModel(nj.Module):
 
   def train(self, data, state):
     modules = [self.encoder, self.rssm, *self.heads.values()]
-    mets, (state, outs, metrics) = self.opt(
-        modules, self.loss, data, state, has_aux=True)
+    mets, (state, outs, metrics) = self.opt(modules,
+                                            self.loss,
+                                            data,
+                                            state,
+                                            has_aux=True)
     metrics.update(mets)
     return state, outs, metrics
 
@@ -154,10 +169,10 @@ class WorldModel(nj.Module):
     embed = self.encoder(data)
     # pdb.set_trace()
     prev_latent, prev_action = state
-    prev_actions = jnp.concatenate([
-        prev_action[:, None], data['action'][:, :-1]], 1)
-    post, prior = self.rssm.observe(
-        embed, prev_actions, data['is_first'], prev_latent)
+    prev_actions = jnp.concatenate(
+        [prev_action[:, None], data['action'][:, :-1]], 1)
+    post, prior = self.rssm.observe(embed, prev_actions, data['is_first'],
+                                    prev_latent)
     dists = {}
     feats = {**post, 'embed': embed}
     for name, head in self.heads.items():
@@ -173,7 +188,7 @@ class WorldModel(nj.Module):
       losses[key] = loss
     scaled = {k: v * self.scales[k] for k, v in losses.items()}
     model_loss = sum(scaled.values())
-    out = {'embed':  embed, 'post': post, 'prior': prior}
+    out = {'embed': embed, 'post': post, 'prior': prior}
     out.update({f'{k}_loss': v for k, v in losses.items()})
     last_latent = {k: v[:, -1] for k, v in post.items()}
     last_action = data['action'][:, -1]
@@ -186,21 +201,22 @@ class WorldModel(nj.Module):
     keys = list(self.rssm.initial(1).keys())
     start = {k: v for k, v in start.items() if k in keys}
     start['action'] = policy(start)
+
     def step(prev, _):
       prev = prev.copy()
       state = self.rssm.img_step(prev, prev.pop('action'))
       return {**state, 'action': policy(state)}
-    traj = jaxutils.scan(
-        step, jnp.arange(horizon), start, self.config.imag_unroll)
+
+    traj = jaxutils.scan(step, jnp.arange(horizon), start,
+                         self.config.imag_unroll)
     # dict_keys(['action', 'deter', 'logit', 'stoch'])
-    traj = {
-        k: jnp.concatenate([start[k][None], v], 0) for k, v in traj.items()}
+    traj = {k: jnp.concatenate([start[k][None], v], 0) for k, v in traj.items()}
     cont = self.heads['cont'](traj).mode()
     traj['cont'] = jnp.concatenate([first_cont[None], cont[1:]], 0)
     discount = 1 - 1 / self.config.horizon
     traj['weight'] = jnp.cumprod(discount * traj['cont'], 0) / discount
     return traj
-  
+
   def imagine_carry(self, policy, start, horizon, carry):
     first_cont = (1.0 - start['is_terminal']).astype(jnp.float32)
     keys = list(self.rssm.initial(1).keys())
@@ -210,26 +226,27 @@ class WorldModel(nj.Module):
     initial_action, initial_carry = policy(start, carry)
     start['action'] = initial_action['action'].sample(seed=nj.rng())
     start['carry'] = initial_carry
+
     def step(prev, _):
       prev = prev.copy()
       state = self.rssm.img_step(prev, prev.pop('action'))
       action_dict, carry = policy(state, prev['carry'])
       action = action_dict['action'].sample(seed=nj.rng())
       return {**state, 'action': action, 'carry': carry}
-    
+
     # dict_keys(['action', 'carry', 'deter', 'logit', 'stoch'])
     # traj[not 'carry'] is (horizon-1, 192, d_key)
     # keys of traj['carry'] are (horizon-1, 192, d_key)
-    traj = jaxutils.scan(step, jnp.arange(horizon), start, self.config.imag_unroll)
+    traj = jaxutils.scan(step, jnp.arange(horizon), start,
+                         self.config.imag_unroll)
     traj.update(traj['carry'])
     del traj['carry']
     start.update(start['carry'])
     del start['carry']
     # add start back in -- now (horizon, 192, d_key)
-    traj = {k: jnp.concatenate(
-      [start[k][None], v], 0) for k, v in traj.items()}
-    
-    cont = self.heads['cont'](traj).mode()  # Director-v1 does .mean()
+    traj = {k: jnp.concatenate([start[k][None], v], 0) for k, v in traj.items()}
+
+    cont = self.heads['cont'](traj).mode()    # Director-v1 does .mean()
     traj['cont'] = jnp.concatenate([first_cont[None], cont[1:]], 0)
     discount = 1 - 1 / self.config.horizon
     traj['weight'] = jnp.cumprod(discount * traj['cont'], 0) / discount
@@ -245,8 +262,8 @@ class WorldModel(nj.Module):
         data['is_first'][:6, :5])
     start = {k: v[:, -1] for k, v in context.items()}
     recon = self.heads['decoder'](context)
-    openl = self.heads['decoder'](
-        self.rssm.imagine(data['action'][:6, 5:], start))
+    openl = self.heads['decoder'](self.rssm.imagine(data['action'][:6, 5:],
+                                                    start))
     for key in self.heads['decoder'].cnn_shapes.keys():
       truth = data[key][:6].astype(jnp.float32)
       model = jnp.concatenate([recon[key].mode()[:, :5], openl[key].mode()], 1)
@@ -278,7 +295,9 @@ class WorldModel(nj.Module):
 class ImagActorCritic(nj.Module):
 
   def __init__(self, critics, scales, act_space, config):
-    critics = {k: v for k, v in critics.items() if (scales[k] and scales[k] != 0)}
+    critics = {
+        k: v for k, v in critics.items() if (scales[k] and scales[k] != 0)
+    }
     for key, scale in scales.items():
       assert not scale or key in critics, key
     self.critics = {k: v for k, v in critics.items() if scales[k]}
@@ -288,11 +307,15 @@ class ImagActorCritic(nj.Module):
     disc = act_space.discrete
     self.grad = config.actor_grad_disc if disc else config.actor_grad_cont
     self.actor = nets.MLP(
-        name='actor', dims='deter', shape=act_space.shape, **config.actor,
+        name='actor',
+        dims='deter',
+        shape=act_space.shape,
+        **config.actor,
         dist=config.actor_dist_disc if disc else config.actor_dist_cont)
     self.retnorms = {
         k: jaxutils.Moments(**config.retnorm, name=f'retnorm_{k}')
-        for k in critics}
+        for k in critics
+    }
     self.opt = jaxutils.Optimizer(name='actor_opt', **config.actor_opt)
 
   def initial(self, batch_size):
@@ -302,11 +325,13 @@ class ImagActorCritic(nj.Module):
     return {'action': self.actor(state)}, carry
 
   def train(self, imagine, start, context):
+
     def loss(start):
       policy = lambda s: self.actor(sg(s)).sample(seed=nj.rng())
       traj = imagine(policy, start, self.config.imag_horizon)
       loss, metrics = self.loss(traj)
       return loss, (traj, metrics)
+
     mets, (traj, metrics) = self.opt(self.actor, loss, start, has_aux=True)
     metrics.update(mets)
     for key, critic in self.critics.items():
@@ -362,10 +387,9 @@ class VFunction(nj.Module):
     self.config = config
     self.net = nets.MLP((), name='net', dims='deter', **self.config.critic)
     self.slow = nets.MLP((), name='slow', dims='deter', **self.config.critic)
-    self.updater = jaxutils.SlowUpdater(
-        self.net, self.slow,
-        self.config.slow_critic_fraction,
-        self.config.slow_critic_update)
+    self.updater = jaxutils.SlowUpdater(self.net, self.slow,
+                                        self.config.slow_critic_fraction,
+                                        self.config.slow_critic_update)
     self.opt = jaxutils.Optimizer(name='critic_opt', **self.config.critic_opt)
 
   def train(self, traj, actor):
@@ -383,10 +407,8 @@ class VFunction(nj.Module):
     if self.config.critic_slowreg == 'logprob':
       reg = -dist.log_prob(sg(self.slow(traj).mean()))
     elif self.config.critic_slowreg == 'xent':
-      reg = -jnp.einsum(
-          '...i,...i->...',
-          sg(self.slow(traj).probs),
-          jnp.log(dist.probs))
+      reg = -jnp.einsum('...i,...i->...', sg(self.slow(traj).probs),
+                        jnp.log(dist.probs))
     else:
       raise NotImplementedError(self.config.critic_slowreg)
     loss += self.config.loss_scales.slowreg * reg
