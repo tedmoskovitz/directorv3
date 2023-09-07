@@ -29,9 +29,9 @@ def main(argv=None):
   for name in parsed.configs:
     config = config.update(agt.Agent.configs[name])
   config = embodied.Flags(config).parse(other)
-  args = embodied.Config(
-      **config.run, logdir=config.logdir,
-      batch_steps=config.batch_size * config.batch_length)
+  args = embodied.Config(**config.run,
+                         logdir=config.logdir,
+                         batch_steps=config.batch_size * config.batch_length)
   print(config)
 
   logdir = embodied.Path(args.logdir)
@@ -61,11 +61,11 @@ def main(argv=None):
       replay = make_replay(config, logdir / 'replay')
       eval_replay = make_replay(config, logdir / 'eval_replay', is_eval=True)
       env = make_envs(config)
-      eval_env = make_envs(config)  # mode='eval'
+      eval_env = make_envs(config)    # mode='eval'
       cleanup += [env, eval_env]
       agent = agt.Agent(env.obs_space, env.act_space, step, config)
-      embodied.run.train_eval(
-          agent, env, eval_env, replay, eval_replay, logger, args)
+      embodied.run.train_eval(agent, env, eval_env, replay, eval_replay, logger,
+                              args)
 
     elif args.script == 'train_holdout':
       replay = make_replay(config, logdir / 'replay')
@@ -78,11 +78,10 @@ def main(argv=None):
       env = make_envs(config)
       cleanup.append(env)
       agent = agt.Agent(env.obs_space, env.act_space, step, config)
-      embodied.run.train_holdout(
-          agent, env, replay, eval_replay, logger, args)
+      embodied.run.train_holdout(agent, env, replay, eval_replay, logger, args)
 
     elif args.script == 'eval_only':
-      env = make_envs(config)  # mode='eval'
+      env = make_envs(config)    # mode='eval'
       cleanup.append(env)
       agent = agt.Agent(env.obs_space, env.act_space, step, config)
       embodied.run.eval_only(agent, env, logger, args)
@@ -95,9 +94,12 @@ def main(argv=None):
       agent = agt.Agent(env.obs_space, env.act_space, step, config)
       env.close()
       replay = make_replay(config, logdir / 'replay', rate_limit=True)
-      embodied.run.parallel(
-          agent, replay, logger, bind(make_env, config),
-          num_envs=config.envs.amount, args=args)
+      embodied.run.parallel(agent,
+                            replay,
+                            logger,
+                            bind(make_env, config),
+                            num_envs=config.envs.amount,
+                            args=args)
 
     else:
       raise NotImplementedError(args.script)
@@ -112,19 +114,23 @@ def make_logger(parsed, logdir, step, config):
       embodied.logger.TerminalOutput(config.filter),
       embodied.logger.JSONLOutput(logdir, 'metrics.jsonl'),
       embodied.logger.JSONLOutput(logdir, 'scores.jsonl', 'episode/score'),
-      # embodied.logger.TensorBoardOutput(logdir),
-      # embodied.logger.WandBOutput('episode/score', logdir, config),  # logdir.name
-      # embodied.logger.MLFlowOutput(logdir.name),
+    # embodied.logger.TensorBoardOutput(logdir),
+    # embodied.logger.WandBOutput('episode/score', logdir, config),  # logdir.name
+    # embodied.logger.MLFlowOutput(logdir.name),
   ]
   if config.get('use_wandb', False):
     logging_outs.append(
-      embodied.logger.WandBOutput(config.wandb_project_name, '.*', logdir, config))
+        embodied.logger.WandBOutput(config.wandb_project_name, '.*', logdir,
+                                    config.wandb_exp_name_prefix, config))
   logger = embodied.Logger(step, logging_outs, multiplier)
   return logger
 
 
-def make_replay(
-    config, directory=None, is_eval=False, rate_limit=False, **kwargs):
+def make_replay(config,
+                directory=None,
+                is_eval=False,
+                rate_limit=False,
+                **kwargs):
   assert config.replay == 'uniform' or not rate_limit
   length = config.batch_length
   size = config.replay_size // 10 if is_eval else config.replay_size
@@ -164,18 +170,30 @@ def make_env(config, **overrides):
   # using `embodied.envs.from_gym.FromGym` and `embodied.envs.from_dm.FromDM`.
   suite, task = config.task.split('_', 1)
   ctor = {
-      'dummy': 'embodied.envs.dummy:Dummy',
-      'gym': 'embodied.envs.from_gym:FromGym',
-      'dm': 'embodied.envs.from_dm:FromDM',
-      'crafter': 'embodied.envs.crafter:Crafter',
-      'dmc': 'embodied.envs.dmc:DMC',
-      'atari': 'embodied.envs.atari:Atari',
-      'dmlab': 'embodied.envs.dmlab:DMLab',
-      'minecraft': 'embodied.envs.minecraft:Minecraft',
-      'loconav': 'embodied.envs.loconav:LocoNav',
-      'pinpad': 'embodied.envs.pinpad:PinPad',
-      'bsuite': 'embodied.envs.bsuite:BsuiteEnv',
-      'tabular-navigation': 'embodied.envs.tabular_navigation:TabularNavigationEnv',
+      'dummy':
+          'embodied.envs.dummy:Dummy',
+      'gym':
+          'embodied.envs.from_gym:FromGym',
+      'dm':
+          'embodied.envs.from_dm:FromDM',
+      'crafter':
+          'embodied.envs.crafter:Crafter',
+      'dmc':
+          'embodied.envs.dmc:DMC',
+      'atari':
+          'embodied.envs.atari:Atari',
+      'dmlab':
+          'embodied.envs.dmlab:DMLab',
+      'minecraft':
+          'embodied.envs.minecraft:Minecraft',
+      'loconav':
+          'embodied.envs.loconav:LocoNav',
+      'pinpad':
+          'embodied.envs.pinpad:PinPad',
+      'bsuite':
+          'embodied.envs.bsuite:BsuiteEnv',
+      'tabular-navigation':
+          'embodied.envs.tabular_navigation:TabularNavigationEnv',
   }[suite]
   if isinstance(ctor, str):
     module, cls = ctor.split(':')

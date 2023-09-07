@@ -125,6 +125,83 @@ python dreamerv3/train.py \
   --configs crafter --batch_size 16 --run.train_ratio 32
 ```
 
+Reloaded World-Model:
+```sh
+  python dreamerv3/train.py \
+    --logdir ~/logdir/$(date "+%Y%m%d-%H%M%S")  \
+    --configs tmaze --batch_size 16 --run.train_ratio 32 \
+    --jax.platform=cpu --model_opt.lr=0.0 --reload_wm=True \
+    --use_wandb=True --task_behavior=FeudalHRL
+```
+
+Director on T-Maze with random encoder and pre-trained model:
+```sh
+  python dreamerv3/train.py \
+    --logdir ~/logdir/$(date "+%Y%m%d-%H%M%S") \
+    --configs tmaze --batch_size 16 --run.train_ratio 32 --jax.platform=cpu \
+    --model_opt.lr=0.0 --reload_wm=True \
+    --reload_wm_ckpt_path=tmaze_wm_checkpoint.ckpt \
+    --task_behavior=FeudalHRL --manager_delta=False --goal_reward=epsilon \
+    --goal_kl=True --use_fixed_kl=False \
+    --reload_goal_encoder=False --vae_imag=True --vae_replay=False \
+    --worker_rews.extr=0.0 --worker_rews.goal=1.0 --worker_rews.expl=0.0 \
+    --goal_decoder_target_update_period=10000 --encdec_kl.target=10.0 \
+    --encdec_opt.lr=0.0 \
+    --use_wandb=True --wandb_exp_name_prefix=directorv3-random_enc-epsilon_rew
+```
+
+
+Director on T-Maze with learned encoder (from model) and pre-trained model:
+```sh
+  python dreamerv3/train.py \
+    --logdir ~/logdir/$(date "+%Y%m%d-%H%M%S") \
+    --configs tmaze --batch_size 16 --run.train_ratio 32 --jax.platform=cpu \
+    --model_opt.lr=0.0 --reload_wm=True \
+    --reload_wm_ckpt_path=tmaze_wm_checkpoint.ckpt \
+    --task_behavior=FeudalHRL --manager_delta=False --goal_reward=epsilon \
+    --goal_kl=True --use_fixed_kl=False \
+    --reload_goal_encoder=False --vae_imag=True --vae_replay=False \
+    --worker_rews.extr=0.0 --worker_rews.goal=1.0 --worker_rews.expl=0.0 \
+    --goal_decoder_target_update_period=500 --encdec_kl.target=10.0 \
+    --encdec_opt.lr=1e-6 \
+    --use_wandb=True \
+    --wandb_exp_name_prefix=directorv3-learned_enc_lr1e_6_from_model-epsilon_rew
+```
+
+Director on T-Maze with learned encoder (from replay) and pre-trained model:
+```sh
+  python dreamerv3/train.py \
+    --logdir ~/logdir/$(date "+%Y%m%d-%H%M%S") \
+    --configs tmaze --batch_size 16 --run.train_ratio 32 --jax.platform=cpu \
+    --model_opt.lr=0.0 --reload_wm=True \
+    --reload_wm_ckpt_path=tmaze_wm_checkpoint.ckpt \
+    --task_behavior=FeudalHRL --manager_delta=False --goal_reward=epsilon \
+    --goal_kl=True --use_fixed_kl=False \
+    --reload_goal_encoder=False --vae_imag=False --vae_replay=True \
+    --worker_rews.extr=0.0 --worker_rews.goal=1.0 --worker_rews.expl=0.0 \
+    --goal_decoder_target_update_period=500 --encdec_kl.target=10.0 \
+    --encdec_opt.lr=1e-6 \
+    --use_wandb=True \
+    --wandb_exp_name_prefix=directorv3-learned_enc_lr1e_6_from_replay-epsilon_rew
+```
+
+Director on T-Maze with learned encoder (from model/replay) and pre-trained model:
+```sh
+  python dreamerv3/train.py \
+    --logdir ~/logdir/$(date "+%Y%m%d-%H%M%S") \
+    --configs tmaze --batch_size 16 --run.train_ratio 32 --jax.platform=cpu \
+    --model_opt.lr=0.0 --reload_wm=True \
+    --reload_wm_ckpt_path=tmaze_wm_checkpoint.ckpt \
+    --task_behavior=FeudalHRL --manager_delta=False --goal_reward=epsilon \
+    --goal_kl=True --use_fixed_kl=False \
+    --reload_goal_encoder=False --vae_imag=True --vae_replay=True \
+    --worker_rews.extr=0.0 --worker_rews.goal=1.0 --worker_rews.expl=0.0 \
+    --goal_decoder_target_update_period=500 --encdec_kl.target=10.0 \
+    --encdec_opt.lr=1e-6 \
+    --use_wandb=True \
+    --wandb_exp_name_prefix=directorv3-learned_enc_lr1e_6_from_model_and_replay-epsilon_rew
+```
+
 # Tips
 
 - All config options are listed in `configs.yaml` and you can override them

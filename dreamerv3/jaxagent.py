@@ -4,7 +4,6 @@ import embodied
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pdb
 
 from . import jaxutils
 from . import ninjax as nj
@@ -14,11 +13,14 @@ tree_flatten = jax.tree_util.tree_flatten
 
 
 def Wrapper(agent_cls):
+
   class Agent(JAXAgent):
     configs = agent_cls.configs
     inner = agent_cls
+
     def __init__(self, *args, **kwargs):
       super().__init__(agent_cls, *args, **kwargs)
+
   return Agent
 
 
@@ -26,6 +28,7 @@ class JAXAgent(embodied.Agent):
 
   def __init__(self, agent_cls, obs_space, act_space, step, config):
     self.config = config.jax
+    self.init_config = config
     self.batch_size = config.batch_size
     self.batch_length = config.batch_length
     self.data_loaders = config.data_loaders
@@ -36,8 +39,8 @@ class JAXAgent(embodied.Agent):
     available = jax.devices(self.config.platform)
     self.policy_devices = [available[i] for i in self.config.policy_devices]
     self.train_devices = [available[i] for i in self.config.train_devices]
-    self.single_device = (self.policy_devices == self.train_devices) and (
-        len(self.policy_devices) == 1)
+    self.single_device = (self.policy_devices == self.train_devices) and (len(
+        self.policy_devices) == 1)
     print(f'JAX devices ({jax.local_device_count()}):', available)
     print('Policy devices:', ', '.join([str(x) for x in self.policy_devices]))
     print('Train devices: ', ', '.join([str(x) for x in self.train_devices]))
@@ -47,7 +50,48 @@ class JAXAgent(embodied.Agent):
     self._should_metrics = embodied.when.Every(self.config.metrics_every)
     self._transform()
     self.varibs = self._init_varibs(obs_space, act_space)
+
+    # Optionally reload World Model
+    self._optionally_reload_wm()
+
+    # Optionally reload goal encoder
+    self._optionally_reload_goal_encoder()
+
     self.sync()
+
+  def _reload_module(self, module_name, ckpt_path):
+    print(f'Reloading module `{module_name}` from `{ckpt_path}`.')
+    reloaded_state = embodied.basics.unpack(
+        embodied.path.Path(ckpt_path).read('rb'))
+    step = reloaded_state['step']
+    print(f'Reloading step = {step}')
+    for (p_name, p_val) in reloaded_state['agent'].items():
+      if module_name not in p_name:
+        continue
+      print(f'Reloading variable `{p_name}`.')
+      self.varibs[p_name] = p_val
+
+  def _optionally_reload_wm(self):
+    if not self.init_config.reload_wm:
+      return
+    self._reload_module(module_name='wm',
+                        ckpt_path=self.init_config.reload_wm_ckpt_path)
+
+  def _optionally_reload_goal_encoder(self):
+    if not self.init_config.reload_goal_encoder:
+      return
+    self._reload_module(
+        module_name='autoenc_opt',
+        ckpt_path=self.init_config.reload_goal_encoder_ckpt_path)
+    self._reload_module(
+        module_name='decoder_mlp',
+        ckpt_path=self.init_config.reload_goal_encoder_ckpt_path)
+    self._reload_module(
+        module_name='encoder_mlp',
+        ckpt_path=self.init_config.reload_goal_encoder_ckpt_path)
+    self._reload_module(
+        module_name='goal-vae_kl-adapt',
+        ckpt_path=self.init_config.reload_goal_encoder_ckpt_path)
 
   def policy(self, obs, state=None, mode='train'):
     obs = obs.copy()
@@ -57,8 +101,7 @@ class JAXAgent(embodied.Agent):
     if state is None:
       state, _ = self._init_policy(varibs, rng, obs['is_first'])
     else:
-      state = tree_map(
-          np.asarray, state, is_leaf=lambda x: isinstance(x, list))
+      state = tree_map(np.asarray, state, is_leaf=lambda x: isinstance(x, list))
       state = self._convert_inps(state, self.policy_devices)
     (outs, state), _ = self._policy(varibs, rng, obs, state, mode=mode)
     outs = self._convert_outs(outs, self.policy_devices)
@@ -70,8 +113,26 @@ class JAXAgent(embodied.Agent):
     rng = self._next_rngs(self.train_devices)
     if state is None:
       state, self.varibs = self._init_train(self.varibs, rng, data['is_first'])
-    (outs, state, mets), self.varibs = self._train(
-        self.varibs, rng, data, state)
+      self._optionally_reload_wm()
+      self._optionally_reload_goal_encoder()
+      self.sync()
+
+    (outs, state, mets), self.varibs = self._train(self.varibs, rng, data,
+                                                   state)
+
+    # Hack for target networks update:
+    # TODO(ag): Move it outside of the scope of this function.
+    if (int(self._updates) %
+        self.init_config.goal_decoder_target_update_period == 0):
+      print('Target update networks')
+      for p_name, p_val in self.varibs.items():
+        if '/decoder_mlp/' not in p_name:
+          continue
+        var_name = p_name.split('agent/task_behavior/decoder_mlp/')[1]
+        target_var_name = f'agent/task_behavior/target_decoder_mlp/{var_name}'
+        self.varibs[target_var_name] = p_val
+        print(f'Updating {target_var_name} from {var_name}')
+
     outs = self._convert_outs(outs, self.train_devices)
     self._updates.increment()
     if self._should_metrics(self._updates):
@@ -82,7 +143,7 @@ class JAXAgent(embodied.Agent):
       self._once = False
       assert jaxutils.Optimizer.PARAM_COUNTS
       for name, count in jaxutils.Optimizer.PARAM_COUNTS.items():
-        if count is not None:  # TODO(Ted) this is a hack...
+        if count is not None:    # TODO(Ted) this is a hack...
           mets[f'params_{name}'] = float(count)
     return outs, state, mets
 
@@ -97,7 +158,8 @@ class JAXAgent(embodied.Agent):
         sources=[generator] * self.batch_size,
         workers=self.data_loaders,
         postprocess=lambda x: self._convert_inps(x, self.train_devices),
-        prefetch_source=4, prefetch_batch=1)
+        prefetch_source=4,
+        prefetch_batch=1)
     return batcher()
 
   def save(self):
@@ -126,8 +188,8 @@ class JAXAgent(embodied.Agent):
     if len(self.policy_devices) == 1:
       self.policy_varibs = jax.device_put(varibs, self.policy_devices[0])
     else:
-      self.policy_varibs = jax.device_put_replicated(
-          varibs, self.policy_devices)
+      self.policy_varibs = jax.device_put_replicated(varibs,
+                                                     self.policy_devices)
 
   def _setup(self):
     try:
@@ -188,8 +250,8 @@ class JAXAgent(embodied.Agent):
         raise ValueError(
             f'Batch must by divisible by {len(devices)} devices: {shapes}')
       # TODO: Avoid the reshape?
-      value = tree_map(
-          lambda x: x.reshape((len(devices), -1) + x.shape[1:]), value)
+      value = tree_map(lambda x: x.reshape((len(devices), -1) + x.shape[1:]),
+                       value)
       shards = []
       for i in range(len(devices)):
         shards.append(tree_map(lambda x: x[i], value))
@@ -210,12 +272,11 @@ class JAXAgent(embodied.Agent):
       value = tree_map(lambda x: x[0], value)
     return value
 
-  def _next_rngs(self, devices, mirror=False, high=2 ** 63 - 1):
+  def _next_rngs(self, devices, mirror=False, high=2**63 - 1):
     if len(devices) == 1:
       return jax.device_put(self.rng.integers(high), devices[0])
     elif mirror:
-      return jax.device_put_replicated(
-          self.rng.integers(high), devices)
+      return jax.device_put_replicated(self.rng.integers(high), devices)
     else:
       return jax.device_put_sharded(
           list(self.rng.integers(high, size=len(devices))), devices)
